@@ -1,0 +1,186 @@
+:root {
+  --bg: #f0f2f5;
+  --surface: #ffffff;
+  --text: #1a1a2e;
+  --text-secondary: #555;
+  --border: #ddd;
+  --brand: #4a6cf7;
+  --brand-hover: #3b5de7;
+  --danger: #e74c3c;
+  --nav-bg: #1a1a2e;
+  --nav-text: #fff;
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  --radius: 10px;
+  --transition: 0.2s ease;
+}
+
+[data-theme="dark"] {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --text: #e0e0e0;
+  --text-secondary: #aaa;
+  --border: #2a2a4a;
+  --brand: #6c8cff;
+  --brand-hover: #5a7ae0;
+  --nav-bg: #0f0f23;
+  --shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  transition: background var(--transition), color var(--transition);
+  min-height: 100vh;
+}
+
+nav {
+  background: var(--nav-bg);
+  padding: 14px 24px;
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+nav a {
+  color: var(--nav-text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: color var(--transition);
+}
+nav a:hover { color: var(--brand); }
+nav .theme-btn {
+  margin-left: auto;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.container { max-width: 960px; margin: 24px auto; padding: 0 20px; }
+
+h1 { margin-bottom: 20px; font-size: 1.6rem; }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--surface);
+  padding: 22px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-decoration: none;
+  color: var(--text);
+  display: block;
+  transition: transform var(--transition), box-shadow var(--transition);
+  border: 1px solid var(--border);
+}
+.card:hover { transform: translateY(-3px); box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+.card h2 { font-size: 1.15rem; margin-bottom: 6px; }
+.card p { color: var(--text-secondary); font-size: 0.9rem; }
+
+label { display: block; margin: 14px 0 5px; font-weight: 600; font-size: 0.9rem; }
+input, select, textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color var(--transition);
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--brand); }
+
+.btn-primary {
+  display: inline-block;
+  padding: 11px 24px;
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 14px;
+  transition: background var(--transition);
+  text-decoration: none;
+}
+.btn-primary:hover { background: var(--brand-hover); }
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  margin-top: 16px;
+}
+th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: right; }
+th { background: var(--nav-bg); color: #fff; font-weight: 600; }
+tr:last-child td { border-bottom: none; }
+
+.flash { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-weight: 500; }
+.flash-error { background: #ffeaea; color: #c0392b; border: 1px solid #e74c3c; }
+
+/* Product Dropdown */
+.product-wrapper { position: relative; }
+.product-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 100;
+  display: none;
+  box-shadow: var(--shadow);
+}
+.product-dropdown.show { display: block; }
+.product-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background var(--transition);
+  font-size: 0.9rem;
+}
+.product-item:hover { background: var(--brand); color: #fff; }
+
+/* Login */
+.login-box {
+  max-width: 400px;
+  margin: 80px auto;
+  background: var(--surface);
+  padding: 32px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .container { padding: 0 12px; }
+  nav { flex-direction: column; gap: 10px; }
+  nav .theme-btn { margin-left: 0; }
+}
