@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ورود — ShopCRM</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="login-box">
+        <h1>🔐 ورود ادمین</h1>
+        
+        {% if error %}
+        <div class="flash flash-error">{{ error }}</div>
+        {% endif %}
+        
+        <form method="POST" action="/login">
+            <label>نام کاربری</label>
+            <input type="text" name="username" required autofocus>
+            
+            <label>رمز عبور</label>
+            <input type="password" name="password" required>
+            
+            <button type="submit" class="btn-primary" style="width:100%">ورود</button>
+        </form>
+        
+        <p style="text-align:center; margin-top:16px; color:var(--text-secondary)">
+            <a href="/" style="color:var(--brand)">→ بازگشت به داشبورد</a>
+        </p>
+    </div>
+</body>
+</html>
