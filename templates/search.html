@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>🔍 جستجوی پیشرفته</h1>
+
+<div class="card" style="margin-bottom:16px">
+    <h3>➕ افزودن فیلتر</h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <div>
+            <label style="margin:0;font-size:0.8rem">ستون</label>
+            <select id="filter-column" style="width:auto"></select>
+        </div>
+        <div>
+            <label style="margin:0;font-size:0.8rem">عملگر</label>
+            <select id="filter-op" style="width:auto">
+                <option value="=">مساوی</option>
+                <option value="like">شامل</option>
+                <option value=">">بزرگتر از</option>
+                <option value="<">کوچکتر از</option>
+                <option value=">=">>=</option>
+                <option value="<="><=</option>
+            </select>
+        </div>
+        <div>
+            <label style="margin:0;font-size:0.8rem">مقدار</label>
+            <input type="text" id="filter-value" placeholder="مقدار..." style="width:150px">
+        </div>
+        <div>
+            <label style="margin:0;font-size:0.8rem">ترکیب</label>
+            <select id="filter-logic" style="width:auto">
+                <option value="AND">AND</option>
+                <option value="OR">OR</option>
+                <option value="NOT">NOT</option>
+            </select>
+        </div>
+        <button class="btn-primary" onclick="addFilter()" style="margin:0;padding:8px 16px">➕</button>
+    </div>
+</div>
+
+<!-- Filters List -->
+<div id="active-filters" style="margin-bottom:16px"></div>
+
+<div style="display:flex;gap:10px;margin-bottom:16px">
+    <button class="btn-primary" onclick="doSearch()" style="margin:0">🔍 جستجو</button>
+    <button class="btn-primary" onclick="clearFilters()" style="margin:0;background:#666">🗑️ پاک کردن</button>
+</div>
+
+<!-- Resuklts -->
+<div id="results"></div>
+
+<script>
+var columns = [];
+fetch('/api/columns')
+    .then(res => res.json())
+    .then(data => {
+        columns = data;
+        var html = '';
+        data.forEach(function(col) {
+            html += '<option value="' + col.id + '">' + col.name + ' (' + col.type + ')</option>';
+        });
+        document.getElementById('filter-column').innerHTML = html;
+    });
+
+var filters = [];
+
+function addFilter() {
+    var colId = document.getElementById('filter-column').value;
+    var colName = document.getElementById('filter-column').selectedOptions[0].text;
+    var op = document.getElementById('filter-op').value;
+    var value = document.getElementById('filter-value').value.trim();
+    var logic = filters.length > 0 ? document.getElementById('filter-logic').value : '';
+    
+    if (!colId || !value) return alert('ستون و مقدار رو پر کن');
+    
+    filters.push({colId: colId, colName: colName, op: op, value: value, logic: logic});
+    document.getElementById('filter-value').value = '';
+    renderFilters();
+}
+
+function removeFilter(index) {
+    filters.splice(index, 1);
+    if (filters.length > 0) filters[0].logic = '';
+    renderFilters();
+}
+
+function renderFilters() {
+    var html = '';
+    filters.forEach(function(f, i) {
+        var opLabel = f.op === 'like' ? 'شامل' : f.op;
+        html += '<div style="display:inline-block;background:var(--brand);color:#fff;padding:6px 12px;border-radius:20px;margin:4px;font-size:0.85rem">';
+        if (f.logic) html += '<strong>' + f.logic + '</strong> ';
+        html += f.colName + ' ' + opLabel + ' "' + f.value + '" ';
+        html += '<span onclick="removeFilter(' + i + ')" style="cursor:pointer;margin-left:4px">✕</span>';
+        html += '</div>';
+    });
+    document.getElementById('active-filters').innerHTML = html;
+}
+
+function clearFilters() {
+    filters = [];
+    renderFilters();
+    document.getElementById('results').innerHTML = '';
+}
+
+function doSearch() {
+    fetch('/api/search-advanced', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filters: filters})
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.length === 0) {
+            document.getElementById('results').innerHTML = '<p style="margin-top:16px;color:var(--text-secondary)">موردی یافت نشد.</p>';
+            return;
+        }
+        
+        var html = '<p style="margin-top:16px;font-weight:600">' + data.length + ' نتیجه یافت شد</p>';
+        html += '<div style="overflow-x:auto"><table><thead><tr><th>شماره فروش</th><th>اطلاعات</th></tr></thead><tbody>';
+        
+        data.forEach(function(sale) {
+            html += '<tr><td style="font-weight:bold">#' + sale.sale_id + '</td><td>';
+            for (var key in sale.data) {
+                html += '<strong>' + key + ':</strong> ' + sale.data[key] + '<br>';
+            }
+            html += '</td></tr>';
+        });
+        
+        html += '</tbody></table></div>';
+        document.getElementById('results').innerHTML = html;
+    });
+}
+</script>
+{% endblock %}
