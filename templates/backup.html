@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>💾 بک‌آپ و بازیابی</h1>
+
+<div class="card" style="margin-bottom:20px">
+    <h3>📥 دانلود بک‌آپ</h3>
+    <a href="/api/backup/download" class="btn-primary">دانلود فایل دیتابیس</a>
+</div>
+
+<div class="card">
+    <h3>📤 بازیابی بک‌آپ</h3>
+    <form method="POST" action="/api/backup/restore" enctype="multipart/form-data">
+        <label>فایل بک‌آپ (.db)</label>
+        <input type="file" name="file" accept=".db" required>
+        <button type="submit" class="btn-primary">بازیابی</button>
+    </form>
+</div>
+{% endblock %}
