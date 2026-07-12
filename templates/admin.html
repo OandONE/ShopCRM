@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>⚙️ مدیریت</h1>
+
+<!-- Add Column -->
+<div class="card" style="margin-bottom:20px">
+    <h3>➕ افزودن ستون جدید</h3>
+    <form method="POST" action="/api/column/add">
+        <label>نام ستون</label>
+        <input type="text" name="name" required>
+        
+        <label>نوع</label>
+        <select name="type">
+            <option value="text">متن</option>
+            <option value="number">عدد</option>
+            <option value="choice">انتخابی</option>
+            <option value="product">محصول (جستجوی هوشمند)</option>
+        </select>
+        
+        <label>گزینه‌ها (برای نوع انتخابی — با کاما جدا کنید)</label>
+        <input type="text" name="options" placeholder="قرمز,آبی,سبز">
+        
+        <label><input type="checkbox" name="required"> اجباری</label>
+        <label><input type="checkbox" name="is_default"> توی فرم سریع باشه</label>
+        
+        <button type="submit" class="btn-primary">➕ اضافه کن</button>
+    </form>
+</div>
+
+<!-- Products -->
+<div class="card" style="margin-bottom:20px">
+    <h3>📦 مدیریت محصولات</h3>
+    <form method="POST" action="/api/product/add" style="display:flex; gap:10px">
+        <input type="text" name="name" placeholder="نام محصول جدید" required>
+        <button type="submit" class="btn-primary" style="margin-top:0">➕</button>
+    </form>
+    <table style="margin-top:12px">
+        <thead><tr><th>نام</th><th>حذف</th></tr></thead>
+        <tbody>
+            {% for p in products %}
+            <tr>
+                <td>{{ p.name }}</td>
+                <td>
+                    <form method="POST" action="/api/product/delete" style="display:inline">
+                        <input type="hidden" name="id" value="{{ p.id }}">
+                        <button type="submit" class="btn-danger" onclick="return confirm('حذف بشه؟')">🗑️</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Rows -->
+<div class="card">
+    <h3>📋 ستون‌های فعلی</h3>
+    <table>
+        <thead><tr><th>ترتیب</th><th>نام</th><th>نوع</th><th>اجباری</th><th>سریع</th><th>حذف</th></tr></thead>
+        <tbody>
+            {% for col in columns %}
+            <tr>
+                <td>{{ col.order }}</td>
+                <td>{{ col.name }}</td>
+                <td>{{ col.type }}</td>
+                <td>{{ "✅" if col.required else "❌" }}</td>
+                <td>{{ "✅" if col.is_default else "❌" }}</td>
+                <td>
+                    <form method="POST" action="/api/column/delete" style="display:inline">
+                        <input type="hidden" name="id" value="{{ col.id }}">
+                        <button type="submit" class="btn-danger" onclick="return confirm('حذف بشه؟')">🗑️</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<p style="margin-top:16px"><a href="/logout" style="color:var(--danger)">🚪 خروج از ادمین</a></p>
+{% endblock %}
