@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>⚡ فروش سریع</h1>
+<script>console.log('QUICK HTML LOADED');</script>
+
+<form method="POST" action="/api/sale" autocomplete="off">
+    {% for col in columns %}
+    <label>{{ col.name }}{% if col.required %} *{% endif %}</label>
+    
+    {% if col.type == "product" %}
+    <div class="product-wrapper" style="position:relative">
+        <input type="text" class="product-search" placeholder="جستجوی محصول..." autocomplete="off"
+            data-col-id="{{ col.id }}" oninput="searchProduct(this)">
+        <div class="product-dropdown" data-col-id="{{ col.id }}" style="position:absolute;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:0 0 8px 8px;max-height:180px;overflow-y:auto;z-index:100;display:none;box-shadow:var(--shadow)"></div>
+        <input type="hidden" name="col_{{ col.id }}" class="product-value" data-col-id="{{ col.id }}">
+    </div>
+    
+    {% elif col.type == "text" %}
+    <input type="text" name="col_{{ col.id }}" {% if col.required %}required{% endif %} autocomplete="off">
+    
+    {% elif col.type == "number" %}
+    <div style="position:relative">
+        <input type="text" inputmode="numeric" name="col_{{ col.id }}" 
+               {% if col.name == "تعداد" %}value="1"{% endif %}
+               {% if col.required %}required{% endif %} autocomplete="off"
+               {% if col.name == "قیمت (تومان)" %}class="price-input" oninput="updatePriceWords(this)"{% endif %}
+               style="{% if col.name == 'قیمت (تومان)' %}direction:ltr;text-align:right{% endif %}">
+        {% if col.name == "قیمت (تومان)" %}
+        <div class="price-words" style="color:var(--brand);font-weight:600;font-size:0.85rem;margin-top:4px;min-height:20px"></div>
+        {% endif %}
+    </div>
+    
+    {% elif col.type == "choice" %}
+    <select name="col_{{ col.id }}" {% if col.required %}required{% endif %}>
+        <option value="">-- انتخاب --</option>
+        {% for opt in (col.options or "").split(",") %}
+        <option value="{{ opt.strip() }}">{{ opt.strip() }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+    {% endfor %}
+    
+    <label>📅 تاریخ و ساعت</label>
+    <input type="text" name="col_datetime" id="datetime-field" autocomplete="off">
+    
+    <button type="submit" class="btn-primary">💾 ثبت سریع</button>
+</form>
+
+<script>
+function formatNumber(num) {
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+async function updatePriceWords(input) {
+    const raw = input.value.replace(/,/g, "");
+    const wordsDiv = input.parentElement.querySelector('.price-words');
+    
+    if (!raw || isNaN(raw)) {
+        input.dataset.raw = "";
+        wordsDiv.textContent = "";
+        return;
+    }
+    
+    input.dataset.raw = raw;
+    input.value = formatNumber(raw);
+    
+    const res = await fetch(`/api/price-to-words?price=${raw}`);
+    const data = await res.json();
+    wordsDiv.textContent = data.words || "";
+}
+
+document.querySelector('form').addEventListener('submit', function() {
+    document.querySelectorAll('.price-input').forEach(function(input) {
+        input.value = input.dataset.raw || input.value.replace(/,/g, "");
+    });
+});
+function searchProduct(input) {
+    var q = input.value.trim();
+    var colId = input.getAttribute('data-col-id');
+    var dropdown = document.querySelector('.product-dropdown[data-col-id="' + colId + '"]');
+    var hidden = document.querySelector('.product-value[data-col-id="' + colId + '"]');
+    
+    if (q.length < 1) {
+        dropdown.style.display = 'none';
+        return;
+    }
+    
+    fetch('/api/search-products?q=' + encodeURIComponent(q))
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.length === 0) {
+                dropdown.style.display = 'none';
+                return;
+            }
+            
+            var html = '';
+            data.forEach(function(p) {
+                html += '<div class="product-item" data-name="' + p.name + '" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)">' + p.name + '</div>';
+            });
+            dropdown.innerHTML = html;
+            dropdown.style.display = 'block';
+            
+            dropdown.querySelectorAll('.product-item').forEach(function(item) {
+                item.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    input.value = this.getAttribute('data-name');
+                    hidden.value = this.getAttribute('data-name');
+                    dropdown.style.display = 'none';
+                });
+            });
+        });
+}
+
+document.addEventListener('click', function(e) {
+    document.querySelectorAll('.product-dropdown').forEach(function(dd) {
+        var input = document.querySelector('.product-search[data-col-id="' + dd.getAttribute('data-col-id') + '"]');
+        if (input && !input.contains(e.target) && !dd.contains(e.target)) {
+            dd.style.display = 'none';
+        }
+    });
+});
+
+function updateDateTime() {
+    var now = new Date();
+    var d = now.toLocaleDateString('fa-IR', {year:'numeric',month:'2-digit',day:'2-digit'});
+    var t = now.toLocaleTimeString('fa-IR', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    document.getElementById('datetime-field').value = d + " - " + t;
+}
+updateDateTime();
+setInterval(updateDateTime, 10000);
+
+document.addEventListener('DOMContentLoaded', function() {
+    var inputs = document.querySelectorAll('.product-search');
+    console.log('Found inputs:', inputs.length);
+    
+    inputs.forEach(function(input) {
+        console.log('Binding to input:', input.getAttribute('data-col-id'));
+        
+        input.addEventListener('input', function() {
+            var q = this.value.trim();
+            console.log('Searching for:', q);
+            
+            if (q.length < 1) return;
+            
+            var url = '/api/search-products?q=' + encodeURIComponent(q);
+            console.log('Fetching:', url);
+            
+            fetch(url)
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    console.log('Results:', data);
+                })
+                .catch(function(err) {
+                    console.error('Error:', err);
+                });
+        });
+    });
+});
+</script>
+{% endblock %}
