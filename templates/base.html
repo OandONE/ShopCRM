@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShopCRM</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+    console.log('BASE HTML LOADED');
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('DOM READY');
+    });
+</script>
+</head>
+<body>
+    <nav>
+        <a href="/">🏠 داشبورد</a>
+        <a href="/quick">⚡ سریع</a>
+        <a href="/full">📝 کامل</a>
+        <a href="/search">🔍 جستجو</a>
+        <a href="/admin">⚙️ ادمین</a>
+        <a href="/backup">💾 بک‌آپ</a>
+        <button class="theme-btn" onclick="toggleTheme()">🌓</button>
+    </nav>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+        // Dark Mode
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) document.documentElement.setAttribute('data-theme', saved);
+        })();
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        }
+    </script>
+</body>
+</html>
