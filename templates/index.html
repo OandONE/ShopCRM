@@ -1,27 +1,35 @@
 {% extends "base.html" %}
+{% block title %}داشبورد - ShopCRM{% endblock %}
 {% block content %}
-<h1>🏠 ShopCRM — داشبورد</h1>
+<div class="mb-4">
+  <h1 class="h2">🏠 داشبورد</h1>
+  <p class="text-body-secondary">به ShopCRM خوش اومدی</p>
+</div>
 
-<div class="cards">
-    <a href="/quick" class="card">
-        <h2>⚡ فروش سریع</h2>
-        <p>موقع شلوغی — فقط فیلدهای ضروری</p>
+<div class="row g-3">
+  {% set links = [
+    ("/quick", "lightning-charge-fill", "warning", "فروش سریع", "فقط فیلدهای ضروری"),
+    ("/full", "pencil-square", "primary", "فروش کامل", "همه اطلاعات"),
+    ("/search", "search", "info", "جستجو", "فیلتر پیشرفته"),
+    ("/reports", "graph-up-arrow", "success", "گزارش", "نمودار و آمار"),
+    ("/sales", "receipt", "secondary", "فروش‌ها", "لیست و حذف"),
+    ("/admin", "gear-fill", "dark", "مدیریت", "ستون‌ها و محصولات"),
+    ("/backup", "hdd-fill", "danger", "بک‌آپ", "دانلود و بازیابی"),
+  ] %}
+  {% for href, icon, color, title, sub in links %}
+  <div class="col-12 col-md-6 col-lg-4">
+    <a href="{{ href }}" class="text-decoration-none">
+      <div class="card h-100 shadow-sm border-0 card-hover">
+        <div class="card-body">
+          <div class="d-flex align-items-center mb-2">
+            <i class="bi bi-{{ icon }} fs-3 text-{{ color }} me-2"></i>
+            <h5 class="card-title mb-0 text-body">{{ title }}</h5>
+          </div>
+          <p class="card-text text-body-secondary small mb-0">{{ sub }}</p>
+        </div>
+      </div>
     </a>
-    <a href="/full" class="card">
-        <h2>📝 فروش کامل</h2>
-        <p>همه اطلاعات — موقع خلوت</p>
-    </a>
-    <a href="/search" class="card">
-        <h2>🔍 جستجو</h2>
-        <p>فیلتر و جستجوی فروش‌ها</p>
-    </a>
-    <a href="/admin" class="card">
-        <h2>⚙️ مدیریت</h2>
-        <p>ستون‌ها، محصولات</p>
-    </a>
-    <a href="/backup" class="card">
-        <h2>💾 بک‌آپ</h2>
-        <p>دانلود یا بازیابی دیتابیس</p>
-    </a>
+  </div>
+  {% endfor %}
 </div>
 {% endblock %}

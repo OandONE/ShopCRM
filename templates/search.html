@@ -49,16 +49,11 @@
 
 <script>
 var columns = [];
-fetch('/api/columns')
-    .then(res => res.json())
-    .then(data => {
-        columns = data;
-        var html = '';
-        data.forEach(function(col) {
-            html += '<option value="' + col.id + '">' + col.name + ' (' + col.type + ')</option>';
-        });
-        document.getElementById('filter-column').innerHTML = html;
-    });
+fetch('/api/columns').then(r => r.json()).then(data => {
+    columns = data;
+    document.getElementById('filter-column').innerHTML =
+        data.map(col => `<option value="${col.id}">${col.name} (${col.type})</option>`).join('');
+});
 
 var filters = [];
 

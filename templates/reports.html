@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}گزارش - ShopCRM{% endblock %}
+{% block content %}
+<h2 class="h3 mb-4"><i class="bi bi-graph-up-arrow"></i> گزارش‌ها</h2>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card bg-primary text-white shadow-sm">
+      <div class="card-body">
+        <div class="small">کل فروش‌ها</div>
+        <div class="display-5 fw-bold" id="total-sales">-</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card shadow-sm"><div class="card-body">
+      <h5>پرفروش‌ترین محصولات</h5>
+      <canvas id="chart-products" height="220"></canvas>
+    </div></div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card shadow-sm"><div class="card-body">
+      <h5>توزیع جنسیت خریدار</h5>
+      <canvas id="chart-genders" height="220"></canvas>
+    </div></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+fetch('/api/reports/data').then(r => r.json()).then(data => {
+  document.getElementById('total-sales').textContent = data.total_sales;
+
+  new Chart(document.getElementById('chart-products'), {
+    type: 'bar',
+    data: {
+      labels: data.products.map(p => p.name),
+      datasets: [{ label: 'تعداد', data: data.products.map(p => p.count), backgroundColor: '#4a6cf7' }]
+    },
+    options: { plugins: { legend: { display: false } }, responsive: true }
+  });
+
+  new Chart(document.getElementById('chart-genders'), {
+    type: 'doughnut',
+    data: {
+      labels: data.genders.map(g => g.name),
+      datasets: [{ data: data.genders.map(g => g.count), backgroundColor: ['#4a6cf7', '#e83e8c', '#20c997'] }]
+    },
+    options: { responsive: true }
+  });
+});
+</script>
+{% endblock %}
