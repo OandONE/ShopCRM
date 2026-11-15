@@ -350,12 +350,18 @@ def price_to_words(price: str = ""):
 
 
 # API: save sale
+ALLOWED_SOURCES = {"quick", "full"}
+
 @app.post("/api/sale")
 async def save_sale(request: Request):
     form = await request.form()
+
+    raw_source = str(form.get("source", "") or "").strip()
+    source = raw_source if raw_source in ALLOWED_SOURCES else "quick"
+
     with Session(engine) as s:
         columns = _get_columns(s)
-        required_ids = [c.id for c in columns if c.required]
+        # required_ids
 
         values: dict[int, str] = {}
         for key, raw in form.items():
@@ -369,7 +375,6 @@ async def save_sale(request: Request):
             if val:
                 values[cid] = val
 
-        # validate required
         missing = [c.name for c in columns if c.required and not values.get(c.id)]
         if missing:
             raise HTTPException(status_code=400, detail="فیلدهای اجباری خالی: " + "، ".join(missing))
@@ -381,7 +386,8 @@ async def save_sale(request: Request):
         for cid, val in values.items():
             s.add(SaleValue(sale_id=sale.id, column_id=cid, value=val))
         s.commit()
-    return RedirectResponse("/quick", status_code=303)
+
+    return RedirectResponse(f"/{source}", status_code=303)
 
 
 # API: products
