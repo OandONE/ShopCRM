@@ -1,159 +1,212 @@
 {% extends "base.html" %}
+{% block title %}فروش کامل - ShopCRM{% endblock %}
 {% block content %}
-<h1>📝 فروش کامل</h1>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h3 mb-0"><i class="bi bi-pencil-square text-primary"></i> فروش کامل</h2>
+</div>
 
-<form method="POST" action="/api/sale" autocomplete="off">
-    {% for col in columns %}
-    <label>{{ col.name }}{% if col.required %} *{% endif %}</label>
-    
-    {% if col.type == "product" %}
-    <div class="product-wrapper" style="position:relative">
-        <input type="text" class="product-search" placeholder="جستجوی محصول..." autocomplete="off"
-            data-col-id="{{ col.id }}" oninput="searchProduct(this)">
-        <div class="product-dropdown" data-col-id="{{ col.id }}" style="position:absolute;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:0 0 8px 8px;max-height:180px;overflow-y:auto;z-index:100;display:none;box-shadow:var(--shadow)"></div>
-        <input type="hidden" name="col_{{ col.id }}" class="product-value" data-col-id="{{ col.id }}">
-    </div>
-    
-    {% elif col.type == "text" %}
-    <input type="text" name="col_{{ col.id }}" {% if col.required %}required{% endif %} autocomplete="off">
-    
-    {% elif col.type == "number" %}
-    <div style="position:relative">
-        <input type="text" inputmode="numeric" name="col_{{ col.id }}" 
-               {% if col.name == "تعداد" %}value="1"{% endif %}
-               {% if col.required %}required{% endif %} autocomplete="off"
-               {% if col.name == "قیمت (تومان)" %}class="price-input" oninput="updatePriceWords(this)"{% endif %}
-               style="{% if col.name == 'قیمت (تومان)' %}direction:ltr;text-align:right{% endif %}">
-        {% if col.name == "قیمت (تومان)" %}
-        <div class="price-words" style="color:var(--brand);font-weight:600;font-size:0.85rem;margin-top:4px;min-height:20px"></div>
-        {% endif %}
-    </div>
-    
-    {% elif col.type == "choice" %}
-    <select name="col_{{ col.id }}" {% if col.required %}required{% endif %}>
-        <option value="">-- انتخاب --</option>
-        {% for opt in (col.options or "").split(",") %}
-        <option value="{{ opt.strip() }}">{{ opt.strip() }}</option>
+<div class="card shadow-sm">
+  <div class="card-body p-4">
+    <form method="POST" action="/api/sale" autocomplete="off" id="sale-form">
+      <div class="row g-3">
+        {% for col in columns %}
+        <div class="col-12 col-md-6">
+          <label class="form-label fw-semibold">
+            {{ col.name }}{% if col.required %}<span class="text-danger">*</span>{% endif %}
+          </label>
+
+          {% if col.type == "product" %}
+            <div class="product-wrapper" style="position:relative">
+              <input type="text" class="form-control product-search"
+                     placeholder="جستجوی محصول..." autocomplete="off"
+                     data-col-id="{{ col.id }}"
+                     {% if col.required %}required{% endif %}>
+              <div class="product-dropdown"
+                   data-col-id="{{ col.id }}"
+                   style="display:none;position:absolute;top:100%;left:0;right:0;
+                          background:var(--bs-body-bg,#fff);border:1px solid #ccc;
+                          border-radius:0 0 8px 8px;max-height:220px;overflow-y:auto;
+                          z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.15)"></div>
+              <input type="hidden" name="col_{{ col.id }}" class="product-value" data-col-id="{{ col.id }}">
+            </div>
+
+          {% elif col.type == "textarea" %}
+            <textarea class="form-control" name="col_{{ col.id }}" rows="5"
+                      {% if col.required %}required{% endif %}
+                      placeholder="توضیحات بیشتر..."></textarea>
+
+          {% elif col.type == "text" %}
+            <input type="text" class="form-control" name="col_{{ col.id }}"
+                   {% if col.required %}required{% endif %} autocomplete="off">
+
+          {% elif col.type == "number" %}
+            {% if col.name == "قیمت (تومان)" %}
+              <input type="text" inputmode="numeric" class="form-control price-input"
+                     name="col_{{ col.id }}" dir="ltr" style="text-align:right"
+                     {% if col.required %}required{% endif %} autocomplete="off">
+              <div class="form-text text-primary fw-semibold price-words"></div>
+            {% else %}
+              <input type="text" inputmode="numeric" class="form-control"
+                     name="col_{{ col.id }}"
+                     {% if col.name == "تعداد" %}value="1"{% endif %}
+                     {% if col.required %}required{% endif %} autocomplete="off">
+            {% endif %}
+
+          {% elif col.type == "choice" %}
+            <select class="form-select" name="col_{{ col.id }}" {% if col.required %}required{% endif %}>
+              <option value="">= انتخاب کنید =</option>
+              {% for opt in (col.options or "").split(",") %}
+                {% set o = opt.strip() %}
+                {% if o %}<option value="{{ o }}">{{ o }}</option>{% endif %}
+              {% endfor %}
+            </select>
+          {% endif %}
+        </div>
         {% endfor %}
-    </select>
-    {% endif %}
-    {% endfor %}
-    
-    <label>📅 تاریخ و ساعت</label>
-    <input type="text" name="col_datetime" id="datetime-field" autocomplete="off">
-    
-    <button type="submit" class="btn-primary">💾 ثبت کامل</button>
-</form>
+      </div>
 
+      <div class="d-flex gap-2 mt-4">
+        <button type="submit" class="btn btn-primary flex-grow-1">
+          <i class="bi bi-check2-circle"></i> ثبت کامل
+        </button>
+        <a href="/full" class="btn btn-outline-secondary">ریست</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
-function formatNumber(num) {
-    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-}
+(function () {
+  'use strict';
 
-async function updatePriceWords(input) {
-    const raw = input.value.replace(/,/g, "");
-    const wordsDiv = input.parentElement.querySelector('.price-words');
-    
-    if (!raw || isNaN(raw)) {
-        input.dataset.raw = "";
-        wordsDiv.textContent = "";
-        return;
-    }
-    
-    input.dataset.raw = raw;
-    input.value = formatNumber(raw);
-    
-    const res = await fetch(`/api/price-to-words?price=${raw}`);
-    const data = await res.json();
-    wordsDiv.textContent = data.words || "";
-}
+  function initProduct(input) {
+    var wrapper = input.parentElement;
+    var dropdown = wrapper.querySelector('.product-dropdown');
+    var hidden = wrapper.querySelector('.product-value');
+    var timer = null;
+    var lastQ = '';
 
-document.querySelector('form').addEventListener('submit', function() {
-    document.querySelectorAll('.price-input').forEach(function(input) {
-        input.value = input.dataset.raw || input.value.replace(/,/g, "");
-    });
-});
-function searchProduct(input) {
-    var q = input.value.trim();
-    var colId = input.getAttribute('data-col-id');
-    var dropdown = document.querySelector('.product-dropdown[data-col-id="' + colId + '"]');
-    var hidden = document.querySelector('.product-value[data-col-id="' + colId + '"]');
-    
-    if (q.length < 1) {
-        dropdown.style.display = 'none';
-        return;
+    function hide() {
+      dropdown.style.display = 'none';
+      dropdown.innerHTML = '';
     }
-    
-    fetch('/api/search-products?q=' + encodeURIComponent(q))
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (data.length === 0) {
-                dropdown.style.display = 'none';
-                return;
-            }
-            
-            var html = '';
-            data.forEach(function(p) {
-                html += '<div class="product-item" data-name="' + p.name + '" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)">' + p.name + '</div>';
-            });
-            dropdown.innerHTML = html;
-            dropdown.style.display = 'block';
-            
-            dropdown.querySelectorAll('.product-item').forEach(function(item) {
-                item.addEventListener('mousedown', function(e) {
-                    e.preventDefault();
-                    input.value = this.getAttribute('data-name');
-                    hidden.value = this.getAttribute('data-name');
-                    dropdown.style.display = 'none';
-                });
-            });
+
+    function render(items) {
+      if (!items.length) { hide(); return; }
+      var html = '';
+      for (var i = 0; i < items.length; i++) {
+        var name = String(items[i].name);
+        var safe = name.replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        html += '<div class="product-item" data-name="' + safe + '" ' +
+                'style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #eee">' +
+                safe + '</div>';
+      }
+      dropdown.innerHTML = html;
+      dropdown.style.display = 'block';
+      var items2 = dropdown.querySelectorAll('.product-item');
+      for (var j = 0; j < items2.length; j++) {
+        items2[j].addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          input.value = this.getAttribute('data-name');
+          hidden.value = this.getAttribute('data-name');
+          hide();
+          input.focus();
         });
-}
+        items2[j].addEventListener('mouseover', function () {
+          this.style.background = '#f0f0f0';
+        });
+        items2[j].addEventListener('mouseout', function () {
+          this.style.background = '';
+        });
+      }
+    }
 
-document.addEventListener('click', function(e) {
-    document.querySelectorAll('.product-dropdown').forEach(function(dd) {
-        var input = document.querySelector('.product-search[data-col-id="' + dd.getAttribute('data-col-id') + '"]');
-        if (input && !input.contains(e.target) && !dd.contains(e.target)) {
-            dd.style.display = 'none';
+    input.addEventListener('input', function () {
+      hidden.value = '';
+      var q = input.value.trim();
+      if (!q) { hide(); return; }
+      if (q === lastQ) return;
+      lastQ = q;
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        fetch('/api/search-products?q=' + encodeURIComponent(q))
+          .then(function (r) { return r.json(); })
+          .then(function (list) {
+            if (input.value.trim() === q) render(list);
+          })
+          .catch(function () { hide(); });
+      }, 120);
+    });
+
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') hide();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!wrapper.contains(e.target)) hide();
+    });
+  }
+
+  function initPrice(input) {
+    var wordsDiv = input.parentElement.querySelector('.price-words');
+    var timer = null;
+
+    function update() {
+      var raw = input.value.replace(/,/g, '');
+      if (!raw || isNaN(raw)) {
+        input.dataset.raw = '';
+        if (wordsDiv) wordsDiv.textContent = '';
+        return;
+      }
+      input.dataset.raw = raw;
+      input.value = raw.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        fetch('/api/price-to-words?price=' + encodeURIComponent(raw))
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (wordsDiv) wordsDiv.textContent = d.words || '';
+          })
+          .catch(function () {});
+      }, 150);
+    }
+    input.addEventListener('input', update);
+  }
+
+  function ready() {
+    var products = document.querySelectorAll('.product-search');
+    for (var i = 0; i < products.length; i++) initProduct(products[i]);
+
+    var prices = document.querySelectorAll('.price-input');
+    for (var j = 0; j < prices.length; j++) initPrice(prices[j]);
+
+    var form = document.getElementById('sale-form');
+    if (form) {
+      form.addEventListener('submit', function () {
+        var pin = form.querySelectorAll('.price-input');
+        for (var k = 0; k < pin.length; k++) {
+          pin[k].value = pin[k].dataset.raw || pin[k].value.replace(/,/g, '');
         }
-    });
-});
+        var wrappers = form.querySelectorAll('.product-wrapper');
+        for (var w = 0; w < wrappers.length; w++) {
+          var vis = wrappers[w].querySelector('.product-search');
+          var hid = wrappers[w].querySelector('.product-value');
+          if (vis && hid && !hid.value && vis.value.trim()) {
+            hid.value = vis.value.trim();
+          }
+        }
+      });
+    }
+  }
 
-function updateDateTime() {
-    var now = new Date();
-    var d = now.toLocaleDateString('fa-IR', {year:'numeric',month:'2-digit',day:'2-digit'});
-    var t = now.toLocaleTimeString('fa-IR', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    document.getElementById('datetime-field').value = d + " - " + t;
-}
-updateDateTime();
-setInterval(updateDateTime, 10000);
-
-document.addEventListener('DOMContentLoaded', function() {
-    var inputs = document.querySelectorAll('.product-search');
-    console.log('Found inputs:', inputs.length);
-    
-    inputs.forEach(function(input) {
-        console.log('Binding to input:', input.getAttribute('data-col-id'));
-        
-        input.addEventListener('input', function() {
-            var q = this.value.trim();
-            console.log('Searching for:', q);
-            
-            if (q.length < 1) return;
-            
-            var url = '/api/search-products?q=' + encodeURIComponent(q);
-            console.log('Fetching:', url);
-            
-            fetch(url)
-                .then(function(res) { return res.json(); })
-                .then(function(data) {
-                    console.log('Results:', data);
-                })
-                .catch(function(err) {
-                    console.error('Error:', err);
-                });
-        });
-    });
-});
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ready);
+  } else {
+    ready();
+  }
+})();
 </script>
 {% endblock %}

@@ -1,18 +1,48 @@
 {% extends "base.html" %}
+{% block title %}بک‌آپ - ShopCRM{% endblock %}
 {% block content %}
-<h1>💾 بک‌آپ و بازیابی</h1>
+<h2 class="h3 mb-4"><i class="bi bi-hdd"></i> بک‌آپ و بازیابی</h2>
 
-<div class="card" style="margin-bottom:20px">
-    <h3>📥 دانلود بک‌آپ</h3>
-    <a href="/api/backup/download" class="btn-primary">دانلود فایل دیتابیس</a>
-</div>
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-primary text-white">
+        <i class="bi bi-download"></i> دانلود بک‌آپ
+      </div>
+      <div class="card-body">
+        <p class="text-body-secondary small mb-3">
+          یک فایل از دیتابیس فعلی دانلود کن. قبل از هر تغییر مهم، این کار رو انجام بده.
+        </p>
+        <a href="/api/backup/download" class="btn btn-primary">
+          <i class="bi bi-download"></i> دانلود فایل دیتابیس
+        </a>
+      </div>
+    </div>
+  </div>
 
-<div class="card">
-    <h3>📤 بازیابی بک‌آپ</h3>
-    <form method="POST" action="/api/backup/restore" enctype="multipart/form-data">
-        <label>فایل بک‌آپ (.db)</label>
-        <input type="file" name="file" accept=".db" required>
-        <button type="submit" class="btn-primary">بازیابی</button>
-    </form>
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-warning text-dark">
+        <i class="bi bi-upload"></i> بازیابی بک‌آپ
+      </div>
+      <div class="card-body">
+        <div class="alert alert-warning small">
+          <i class="bi bi-exclamation-triangle"></i>
+          با بازیابی، <strong>تمام داده‌های فعلی جایگزین می‌شن</strong>. حتماً قبلش یه بک‌آپ جدید بگیر.
+        </div>
+        <form method="POST" action="/api/backup/restore" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="mb-3">
+            <label class="form-label">فایل بک‌آپ (.db)</label>
+            <input type="file" name="file" accept=".db" class="form-control" required>
+          </div>
+          <button type="submit" class="btn btn-warning"
+                  onclick="return confirm('مطمئنی؟ داده‌های فعلی پاک می‌شن.')">
+            <i class="bi bi-arrow-counterclockwise"></i> بازیابی
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}

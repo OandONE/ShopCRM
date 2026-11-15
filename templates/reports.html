@@ -31,7 +31,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="/static/vendor/chartjs/chart.umd.min.js"></script>
 <script>
 fetch('/api/reports/data').then(r => r.json()).then(data => {
   document.getElementById('total-sales').textContent = data.total_sales;
