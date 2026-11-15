@@ -1,79 +1,154 @@
-from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, Response
+import csv
+import hashlib
+import hmac
+import io
+import json
+import os
+import secrets
+import sqlite3
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel, Session, create_engine, select, func
-from sqlalchemy import Float, cast, or_, and_
-from models import Admin, AdminSession, Column, Product, Sale, SaleValue
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
-from collections import defaultdict
-import uvicorn, hashlib, hmac, secrets, io, csv
-from datetime import datetime, timedelta, timezone
-import io, csv
-from fastapi.responses import Response
-from sqlalchemy import cast, Float
-from datetime import timedelta
+from sqlalchemy import Float, cast, desc
+from sqlmodel import Session, SQLModel, create_engine, func, select
+
+from audit import write_audit
+from models import (
+    AuditLog,
+    Column,
+    DeletedSale,
+    Product,
+    Sale,
+    SaleValue,
+    StoreSettings,
+    User,
+    UserSession,
+)
+from rate_limit import RateLimiter
+
 
 # Setup
+
 engine = create_engine("sqlite:///database.db", connect_args={"check_same_thread": False})
+templates = Jinja2Templates(directory="templates")
+
+SESSION_COOKIE = "shopcrm_session"
+SESSION_DAYS = 7
+login_limiter = RateLimiter(max_attempts=5, window_minutes=15, cleanup_minutes=30)
 
 
-# Auth helpers (PBKDF2 + legacy SHA256 fallback)
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+# Password helpers
+
 def hash_password(password: str, salt: bytes | None = None) -> str:
     if salt is None:
         salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
     return f"pbkdf2${salt.hex()}${digest.hex()}"
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 def verify_password(password: str, stored: str) -> bool:
-    """support old hash sha256"""
     if stored.startswith("pbkdf2$"):
         _, salt_hex, digest_hex = stored.split("$")
         salt = bytes.fromhex(salt_hex)
         expected = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
         return hmac.compare_digest(expected.hex(), digest_hex)
-    # legacy
     return hmac.compare_digest(hashlib.sha256(password.encode()).hexdigest(), stored)
 
 
-SESSION_COOKIE = "shopcrm_session"
-SESSION_DAYS = 7
+# Session & Auth dependencies
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
-def create_session(admin_id: int) -> AdminSession:
-    return AdminSession(
-        token=secrets.token_urlsafe(32),
-        admin_id=admin_id,
-        csrf_token=secrets.token_urlsafe(24),
-        expires_at=utcnow() + timedelta(days=SESSION_DAYS),
-    )
-
-
-def get_session(request: Request) -> AdminSession | None:
+def get_session(request: Request) -> UserSession | None:
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
     with Session(engine) as s:
         sess = s.exec(
-            select(AdminSession).where(
-                AdminSession.token == token,
-                AdminSession.expires_at > utcnow(),
+            select(UserSession).where(
+                UserSession.token == token,
+                UserSession.expires_at > utcnow(),
             )
         ).first()
         return sess
 
 
-def check_admin(request: Request) -> AdminSession:
+def get_current_user(request: Request) -> User | None:
+    if hasattr(request.state, "current_user"):
+        return request.state.current_user
+
     sess = get_session(request)
     if not sess:
-        raise HTTPException(status_code=302, headers={"Location": "/login"})
-    request.state.admin_session = sess
-    return sess
+        request.state.current_user = None
+        return None
+
+    with Session(engine) as s:
+        user = s.get(User, sess.user_id)
+        if user and user.is_active and not user.is_deleted:
+            request.state.current_user = user
+            return user
+
+    request.state.current_user = None
+    return None
+
+
+def _is_api(request: Request) -> bool:
+    return request.url.path.startswith("/api/")
+
+
+def require_user(request: Request) -> User:
+    user = get_current_user(request)
+    if not user:
+        next_url = request.url.path
+        if request.url.query:
+            next_url += "?" + request.url.query
+        if _is_api(request):
+            raise HTTPException(status_code=401, detail="نیاز به ورود")
+        raise HTTPException(
+            status_code=302,
+            headers={"Location": f"/login?next={next_url}"},
+        )
+    return user
+
+
+def require_permission(name: str):
+    def checker(request: Request) -> User:
+        user = require_user(request)
+        if not user.has_permission(name):
+            if _is_api(request):
+                raise HTTPException(status_code=403, detail="دسترسی ندارید")
+            raise HTTPException(status_code=302, headers={"Location": "/"})
+        return user
+    return checker
+
+
+def require_owner(request: Request) -> User:
+    user = require_user(request)
+    if not user.is_owner():
+        if _is_api(request):
+            raise HTTPException(status_code=403, detail="فقط مالک")
+        raise HTTPException(status_code=302, headers={"Location": "/"})
+    return user
 
 
 def verify_csrf(request: Request, form_token: str) -> None:
@@ -82,42 +157,63 @@ def verify_csrf(request: Request, form_token: str) -> None:
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
-# ---------- Login rate limiting (in-memory) ----------
-_login_attempts: dict[str, list[datetime]] = {}
+def verify_csrf_header(request: Request) -> None:
+    sess = get_session(request)
+    token = request.headers.get("x-csrf-token", "")
+    if not sess or not token or not hmac.compare_digest(sess.csrf_token, token):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
-def _rate_ok(ip: str) -> bool:
-    now = utcnow()
-    window = timedelta(minutes=15)
-    attempts = [t for t in _login_attempts.get(ip, []) if now - t < window]
-    _login_attempts[ip] = attempts
-    return len(attempts) < 5
+# Safe redirect
+
+def _safe_next(next_url: str) -> str:
+    """فقط مسیرهای داخلی مجازن"""
+    if not next_url or not next_url.startswith("/"):
+        return "/"
+    if next_url.startswith("//") or "\\" in next_url:
+        return "/"
+    return next_url
 
 
-def _rate_hit(ip: str) -> None:
-    _login_attempts.setdefault(ip, []).append(utcnow())
+# Render helper
+
+def render(request: Request, name: str, status_code: int = 200, **ctx):
+    user = get_current_user(request)
+    sess = get_session(request)
+    context = {
+        "request": request,
+        "current_user": user,
+        "csrf_token": sess.csrf_token if sess else "",
+        **ctx,
+    }
+    return templates.TemplateResponse(name, context, status_code=status_code)
 
 
-# ---------- Lifespan / migrations ----------
+# Lifespan
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        # clear invalid sessions
-        for s in session.exec(select(AdminSession).where(AdminSession.expires_at < utcnow())).all():
+        for s in session.exec(select(UserSession).where(UserSession.expires_at < utcnow())).all():
             session.delete(s)
 
-        # defualt admin (if not admin exists)
-        if not session.exec(select(Admin)).first():
-            session.add(Admin(username="admin", password_hash=hash_password("admin")))
+        if not session.exec(select(User)).first():
+            session.add(User(
+                username="owner",
+                password_hash=hash_password("owner"),
+                role="owner",
+                full_name="مالک",
+                is_active=True,
+            ))
+            print("✅ owner پیش‌فرض ساخته شد: owner / owner")
 
-        # defualt cloumn
+        # Shop Settings
+        if not session.exec(select(StoreSettings)).first():
+            session.add(StoreSettings(name="ShopCRM"))
+
+        # defualt cloumns
         if not session.exec(select(Column)).first():
-            # migrane: des cloumn -> textarea
-            desc_col = session.exec(select(Column).where(Column.name == "توضیحات")).first()
-            if desc_col and desc_col.type == "text":
-                desc_col.type = "textarea"
-                session.add(desc_col)
             defaults = [
                 Column(name="محصول", type="product", required=True, is_default=True, order=0),
                 Column(name="قیمت (تومان)", type="number", required=True, is_default=True, order=1),
@@ -126,31 +222,22 @@ async def lifespan(app: FastAPI):
                 Column(name="سن حدودی خریدار", type="number", is_default=False, order=4),
                 Column(name="قد حدودی (سانت)", type="number", is_default=False, order=5),
                 Column(name="ساعت خرید", type="text", is_default=False, order=6),
-                Column(name="توضیحات", type="text", is_default=False, order=7),
+                Column(name="توضیحات", type="textarea", is_default=False, order=7),
             ]
             for col in defaults:
                 session.add(col)
 
-        # defualt products
+        # defualt Products
         if not session.exec(select(Product)).first():
             for p in ["پنیر", "شیر", "ماست", "دوغ", "کره", "خامه", "عسل", "نان", "برنج", "روغن"]:
                 session.add(Product(name=p))
 
         session.commit()
-
-        existing_ids = set(session.exec(select(SaleValue.sale_id)).all())
-        known_ids = {s.id for s in session.exec(select(Sale)).all()}
-        for sid in existing_ids - known_ids:
-            session.add(Sale(id=sid, created_at=utcnow()))
-        session.commit()
-
     yield
 
 
 app = FastAPI(lifespan=lifespan)
-templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
@@ -159,7 +246,8 @@ app.add_middleware(
 )
 
 
-# ---------- Number to Persian (باگ ۱۱-۱۹ فیکس شد) ----------
+# Number to Persian
+
 PERSIAN_DIGITS = ["صفر", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه"]
 PERSIAN_TEENS = ["ده", "یازده", "دوازده", "سیزده", "چهارده", "پانزده", "شانزده", "هفده", "هجده", "نوزده"]
 PERSIAN_TENS = ["", "", "بیست", "سی", "چهل", "پنجاه", "شصت", "هفتاد", "هشتاد", "نود"]
@@ -206,120 +294,232 @@ def number_to_persian(n: int) -> str:
     return " و ".join(reversed(parts))
 
 
-# Pages
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+# Helpers
 
-
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: str = ""):
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
-
-
-@app.post("/login")
-async def login(request: Request):
-    ip = request.client.host if request.client else "unknown"
-    if not _rate_ok(ip):
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "تعداد تلاش زیاد. ۱۵ دقیقه صبر کن."},
-            status_code=429,
-        )
-    form = await request.form()
-    username = str(form.get("username", "")).strip()
-    password = str(form.get("password", ""))
-
-    with Session(engine) as s:
-        admin = s.exec(select(Admin).where(Admin.username == username)).first()
-        if admin and verify_password(password, admin.password_hash):
-            # migrane old hash
-            if not admin.password_hash.startswith("pbkdf2$"):
-                admin.password_hash = hash_password(password)
-            sess = create_session(admin.id or 0)
-            s.add(sess)
-            s.add(admin)
-            s.commit()
-            resp = RedirectResponse("/admin", status_code=303)
-            resp.set_cookie(
-                SESSION_COOKIE, sess.token,
-                httponly=True, samesite="lax", secure=False,
-                max_age=SESSION_DAYS * 24 * 3600,
-            )
-            return resp
-    _rate_hit(ip)
-    return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "error": "نام کاربری یا رمز اشتباه"},
-        status_code=401,
-    )
-
-
-@app.get("/logout")
-def logout(request: Request):
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        with Session(engine) as s:
-            sess = s.exec(select(AdminSession).where(AdminSession.token == token)).first()
-            if sess:
-                s.delete(sess)
-                s.commit()
-    resp = RedirectResponse("/", status_code=303)
-    resp.delete_cookie(SESSION_COOKIE)
-    return resp
-
-
-def _get_columns(session, default_only=False):
+def _get_columns(session, default_only: bool = False):
     q = select(Column).order_by(Column.order.asc())
     if default_only:
         q = q.where(Column.is_default == True)  # type: ignore
     return session.exec(q).all()
 
 
+def _escape_like(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+
+
+# Auth Routes
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "", error: str = ""):
+    user = get_current_user(request)
+    safe_next = _safe_next(next)
+    if user:
+        return RedirectResponse(safe_next, status_code=303)
+    return render(request, "login.html", error=error, next=safe_next)
+
+
+@app.post("/login")
+async def login(request: Request, next: str = ""):
+    ip = _client_ip(request)
+
+    if not login_limiter.is_allowed(ip):
+        write_audit(engine, request, "user.login_failed", success=False,
+                    error_message=f"rate limited ({ip})")
+        return render(request, "login.html",
+                      status_code=429,
+                      error="تعداد تلاش زیاد. کمی صبر کنید.",
+                      next=_safe_next(next))
+
+    form = await request.form()
+    username = str(form.get("username", "")).strip()
+    password = str(form.get("password", ""))
+
+    session_token = None
+    err = "نام کاربری یا رمز اشتباه"
+    authed_user = None
+
+    with Session(engine) as s:
+        user = s.exec(select(User).where(User.username == username)).first()
+        if user and user.is_deleted:
+            err = "این حساب حذف شده"
+        elif user and not user.is_active:
+            err = "این حساب تعلیق شده"
+        elif user and verify_password(password, user.password_hash):
+            # migrate old hash
+            if not user.password_hash.startswith("pbkdf2$"):
+                user.password_hash = hash_password(password)
+            sess = UserSession(
+                token=secrets.token_urlsafe(32),
+                user_id=user.id,
+                csrf_token=secrets.token_urlsafe(24),
+                expires_at=utcnow() + timedelta(days=SESSION_DAYS),
+            )
+            s.add(sess)
+            s.add(user)
+            s.commit()
+            session_token = sess.token
+            authed_user = user
+
+    if session_token and authed_user:
+        login_limiter.reset(ip)
+        write_audit(engine, request, "user.login", user=authed_user)
+        resp = RedirectResponse(_safe_next(next), status_code=303)
+        resp.set_cookie(
+            SESSION_COOKIE, session_token,
+            httponly=True, samesite="lax",
+            max_age=SESSION_DAYS * 24 * 3600,
+        )
+        return resp
+
+    login_limiter.record(ip)
+    write_audit(engine, request, "user.login_failed",
+                username=username or "(empty)", success=False, error_message=err)
+    return render(request, "login.html", status_code=401, error=err, next=_safe_next(next))
+
+
+@app.get("/logout")
+def logout(request: Request):
+    token = request.cookies.get(SESSION_COOKIE)
+    user = get_current_user(request)
+    if token:
+        with Session(engine) as s:
+            sess = s.exec(select(UserSession).where(UserSession.token == token)).first()
+            if sess:
+                s.delete(sess)
+                s.commit()
+    if user:
+        write_audit(engine, request, "user.logout", user=user)
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
+# Password change (self)
+
+@app.get("/me/password", response_class=HTMLResponse)
+def me_password_page(request: Request, user: User = Depends(require_user), msg: str = "", err: str = ""):
+    return render(request, "me_password.html", msg=msg, err=err)
+
+
+@app.post("/me/password")
+async def me_password_submit(request: Request, user: User = Depends(require_user)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    current = str(form.get("current_password", ""))
+    new_pw = str(form.get("new_password", ""))
+    confirm = str(form.get("confirm_password", ""))
+
+    if new_pw != confirm:
+        return render(request, "me_password.html", status_code=400, err="رمز جدید و تکرارش یکسان نیستند")
+    if len(new_pw) < 4:
+        return render(request, "me_password.html", status_code=400, err="رمز جدید باید حداقل ۴ کاراکتر باشه")
+
+    with Session(engine) as s:
+        u = s.get(User, user.id)
+        if not u or not verify_password(current, u.password_hash):
+            write_audit(engine, request, "user.password_change", user=user, success=False,
+                        error_message="current password wrong")
+            return render(request, "me_password.html", status_code=400, err="رمز فعلی اشتباهه")
+
+        u.password_hash = hash_password(new_pw)
+        s.add(u)
+        s.commit()
+
+    write_audit(engine, request, "user.password_change", user=user, target_type="user", target_id=user.id)
+    return RedirectResponse("/me/password?msg=ok", status_code=303)
+
+
+# Dashboard
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request, user: User = Depends(require_user)):
+    with Session(engine) as s:
+        settings = s.exec(select(StoreSettings)).first()
+    # check if password is default
+    is_default_pw = False
+    if user.role == "owner" and user.username == "owner":
+        is_default_pw = verify_password("owner", user.password_hash)
+    return render(request, "index.html", settings=settings, is_default_pw=is_default_pw)
+
+
+# Sale forms
+
 @app.get("/quick", response_class=HTMLResponse)
-def quick_form(request: Request):
+def quick_form(request: Request, user: User = Depends(require_permission("quick_sale"))):
     with Session(engine) as s:
         columns = _get_columns(s, default_only=True)
-        products = s.exec(select(Product).order_by(Product.name)).all()
-    return templates.TemplateResponse("quick.html", {"request": request, "columns": columns, "products": products})
+    return render(request, "quick.html", columns=columns)
 
 
 @app.get("/full", response_class=HTMLResponse)
-def full_form(request: Request):
+def full_form(request: Request, user: User = Depends(require_permission("full_sale"))):
     with Session(engine) as s:
         columns = _get_columns(s)
-        products = s.exec(select(Product).order_by(Product.name)).all()
-    return templates.TemplateResponse("full.html", {"request": request, "columns": columns, "products": products})
+    return render(request, "full.html", columns=columns)
 
 
 @app.get("/search", response_class=HTMLResponse)
-def search_page(request: Request):
-    return templates.TemplateResponse("search.html", {"request": request})
+def search_page(request: Request, user: User = Depends(require_permission("search"))):
+    return render(request, "search.html")
 
+
+# Admin page
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request, sess: AdminSession = Depends(check_admin)):
-    with Session(engine) as s:
-        columns = _get_columns(s)
-        products = s.exec(select(Product).order_by(Product.name)).all()
-    return templates.TemplateResponse(
-        "admin.html",
-        {"request": request, "columns": columns, "products": products, "csrf_token": sess.csrf_token},
+def admin_page(request: Request, user: User = Depends(require_user)):
+    has_any = (
+        user.has_permission("manage_columns")
+        or user.has_permission("manage_products")
+        or user.has_permission("view_current_columns")
     )
+    if not has_any:
+        return RedirectResponse("/", status_code=303)
+
+    with Session(engine) as s:
+        columns = _get_columns(s) if user.has_permission("view_current_columns") else []
+        products = s.exec(select(Product).order_by(Product.name)).all() if user.has_permission("manage_products") else []
+    return render(request, "admin.html", columns=columns, products=products)
 
 
-@app.get("/backup", response_class=HTMLResponse)
-def backup_page(request: Request, sess: AdminSession = Depends(check_admin)):
-    return templates.TemplateResponse("backup.html", {"request": request, "csrf_token": sess.csrf_token})
-
+# Reports
 
 @app.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, _: AdminSession = Depends(check_admin)):
-    return templates.TemplateResponse("reports.html", {"request": request})
+def reports_page(request: Request, user: User = Depends(require_permission("view_reports"))):
+    return render(request, "reports.html")
 
+
+@app.get("/api/reports/data")
+def reports_data(request: Request, user: User = Depends(require_permission("view_reports"))):
+    with Session(engine) as s:
+        total_sales = s.exec(select(func.count(Sale.id))).one()
+        product_col = s.exec(select(Column).where(Column.type == "product")).first()
+        gender_col = s.exec(select(Column).where(Column.type == "choice")).first()
+
+        products, genders = [], []
+        if product_col:
+            rows = s.exec(
+                select(SaleValue.value, func.count(SaleValue.id))
+                .where(SaleValue.column_id == product_col.id)
+                .group_by(SaleValue.value)
+                .order_by(func.count(SaleValue.id).desc())
+                .limit(10)
+            ).all()
+            products = [{"name": r[0], "count": r[1]} for r in rows]
+        if gender_col:
+            rows = s.exec(
+                select(SaleValue.value, func.count(SaleValue.id))
+                .where(SaleValue.column_id == gender_col.id)
+                .group_by(SaleValue.value)
+            ).all()
+            genders = [{"name": r[0], "count": r[1]} for r in rows]
+
+        return {"total_sales": total_sales, "products": products, "genders": genders}
+
+
+# Sales list
 
 @app.get("/sales", response_class=HTMLResponse)
-def sales_page(request: Request, sess: AdminSession = Depends(check_admin)):
+def sales_page(request: Request, user: User = Depends(require_permission("view_sales"))):
     with Session(engine) as s:
         columns = _get_columns(s)
         sales = s.exec(select(Sale).order_by(Sale.id.desc()).limit(200)).all()
@@ -333,150 +533,62 @@ def sales_page(request: Request, sess: AdminSession = Depends(check_admin)):
                 "created_at": sale.created_at,
                 "data": col_values,
             })
-    return templates.TemplateResponse(
-        "sales.html",
-        {"request": request, "sales": sales_data, "columns": columns, "csrf_token": sess.csrf_token},
+    return render(request, "sales.html", sales=sales_data, columns=columns)
+
+
+@app.post("/api/sales/query")
+async def sales_query(request: Request, user: User = Depends(require_permission("view_sales"))):
+    verify_csrf_header(request)
+    body = await request.json()
+    ids = _query_sale_ids(body)
+    with Session(engine) as s:
+        columns = _get_columns(s)
+        result = []
+        for sid in ids[:500]:
+            sale = s.get(Sale, sid)
+            if not sale:
+                continue
+            vals = s.exec(select(SaleValue).where(SaleValue.sale_id == sid)).all()
+            data = {str(v.column_id): v.value for v in vals}
+            result.append({
+                "sale_id": sid,
+                "created_at": sale.created_at.isoformat(),
+                "data": data,
+            })
+    return result
+
+
+@app.post("/api/sales/export.csv")
+async def sales_export(request: Request, user: User = Depends(require_permission("view_sales"))):
+    verify_csrf_header(request)
+    body = await request.json()
+    ids = _query_sale_ids(body)
+    with Session(engine) as s:
+        columns = _get_columns(s)
+        buf = io.StringIO()
+        buf.write("\ufeff")
+        writer = csv.writer(buf)
+        writer.writerow(["شماره", "تاریخ"] + [c.name for c in columns])
+        for sid in ids:
+            sale = s.get(Sale, sid)
+            if not sale:
+                continue
+            vals = {v.column_id: v.value for v in s.exec(
+                select(SaleValue).where(SaleValue.sale_id == sid)
+            ).all()}
+            row = [sid, sale.created_at.strftime("%Y-%m-%d %H:%M")]
+            for c in columns:
+                row.append(vals.get(c.id, ""))
+            writer.writerow(row)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="sales.csv"'},
     )
 
 
-# API: number / price
-@app.get("/api/price-to-words")
-def price_to_words(price: str = ""):
-    try:
-        p = int(price)
-    except (ValueError, TypeError):
-        return {"words": ""}
-    return {"words": number_to_persian(p) + " تومان"}
-
-
-# API: save sale
-ALLOWED_SOURCES = {"quick", "full"}
-
-@app.post("/api/sale")
-async def save_sale(request: Request):
-    form = await request.form()
-
-    raw_source = str(form.get("source", "") or "").strip()
-    source = raw_source if raw_source in ALLOWED_SOURCES else "quick"
-
-    with Session(engine) as s:
-        columns = _get_columns(s)
-        # required_ids
-
-        values: dict[int, str] = {}
-        for key, raw in form.items():
-            if not key.startswith("col_"):
-                continue
-            try:
-                cid = int(key.replace("col_", "", 1))
-            except ValueError:
-                continue
-            val = str(raw).strip()
-            if val:
-                values[cid] = val
-
-        missing = [c.name for c in columns if c.required and not values.get(c.id)]
-        if missing:
-            raise HTTPException(status_code=400, detail="فیلدهای اجباری خالی: " + "، ".join(missing))
-
-        sale = Sale()
-        s.add(sale)
-        s.commit()
-        s.refresh(sale)
-        for cid, val in values.items():
-            s.add(SaleValue(sale_id=sale.id, column_id=cid, value=val))
-        s.commit()
-
-    return RedirectResponse(f"/{source}", status_code=303)
-
-
-# API: products
-def _escape_like(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-
-
-@app.get("/api/search-products")
-def search_products(q: str = ""):
-    with Session(engine) as s:
-        if q:
-            stmt = select(Product).where(Product.name.like(f"%{_escape_like(q)}%", escape="\\"))
-            products = s.exec(stmt).all()
-        else:
-            products = s.exec(select(Product).order_by(Product.name)).all()
-        return [{"id": p.id, "name": p.name} for p in products]
-
-
-# API: columns list
-@app.get("/api/columns")
-def list_columns():
-    with Session(engine) as s:
-        cols = _get_columns(s)
-        return [{"id": c.id, "name": c.name, "type": c.type, "options": c.options} for c in cols]
-
-
-# API: advanced search
-@app.post("/api/search-advanced")
-async def search_advanced(request: Request):
-    body = await request.json()
-    filters = body.get("filters", [])
-    with Session(engine) as s:
-        all_sales = s.exec(select(Sale.id)).all()
-        result: set[int] | None = None
-
-        for i, f in enumerate(filters):
-            try:
-                cid = int(f["colId"])
-            except (KeyError, ValueError, TypeError):
-                continue
-            op = f.get("op", "=")
-            val = str(f.get("value", ""))
-            logic = (f.get("logic") or "AND").upper() if i > 0 else "AND"
-
-            stmt = select(SaleValue.sale_id).where(SaleValue.column_id == cid)
-            if op == "=":
-                stmt = stmt.where(SaleValue.value == val)
-            elif op == "like":
-                stmt = stmt.where(SaleValue.value.like(f"%{_escape_like(val)}%", escape="\\"))
-            elif op in (">", "<", ">=", "<="):
-                try:
-                    num = float(val)
-                except ValueError:
-                    continue
-                col_as_num = cast(SaleValue.value, Float)
-                stmt = stmt.where({
-                    ">": col_as_num > num, "<": col_as_num < num,
-                    ">=": col_as_num >= num, "<=": col_as_num <= num,
-                }[op])
-
-            ids = set(s.exec(stmt).all())
-            if result is None:
-                result = ids
-            elif logic == "OR":
-                result |= ids
-            elif logic == "NOT":
-                result -= ids
-            else:  # AND
-                result &= ids
-
-            if result == set():
-                break
-
-        if result is None:
-            result = set(all_sales)
-
-        # out
-        columns = {c.id: c.name for c in _get_columns(s)}
-        sales_out = []
-        for sid in sorted(result, reverse=True)[:100]:
-            values = s.exec(select(SaleValue).where(SaleValue.sale_id == sid)).all()
-            data = {columns.get(v.column_id, f"ستون {v.column_id}"): v.value for v in values}
-            sales_out.append({"sale_id": sid, "data": data})
-        return sales_out
-
-from datetime import timedelta
-
 def _parse_iso_date(s: str):
-    """YYYY-MM-DD -> datetime naive UTC"""
     if not s:
         return None
     try:
@@ -486,7 +598,6 @@ def _parse_iso_date(s: str):
 
 
 def _query_sale_ids(body: dict) -> list[int]:
-    """filter /api/sales/query and /api/sales/export.csv"""
     from_date = _parse_iso_date(body.get("from_date", ""))
     to_date = _parse_iso_date(body.get("to_date", ""))
     filters = body.get("filters") or []
@@ -496,7 +607,6 @@ def _query_sale_ids(body: dict) -> list[int]:
         if from_date:
             stmt = stmt.where(Sale.created_at >= from_date)
         if to_date:
-            # inclusive end-of-day
             stmt = stmt.where(Sale.created_at < to_date + timedelta(days=1))
         result: set[int] = set(s.exec(stmt).all())
 
@@ -539,64 +649,203 @@ def _query_sale_ids(body: dict) -> list[int]:
         return sorted(result, reverse=True)
 
 
-@app.post("/api/sales/query")
-async def sales_query(request: Request, _: AdminSession = Depends(check_admin)):
-    body = await request.json()
-    ids = _query_sale_ids(body)
-    with Session(engine) as s:
-        columns = _get_columns(s)
-        name_by_id = {c.id: c.name for c in columns}
-        result = []
-        for sid in ids[:500]:
-            sale = s.get(Sale, sid)
-            if not sale:
-                continue
-            vals = s.exec(select(SaleValue).where(SaleValue.sale_id == sid)).all()
-            data = {str(v.column_id): v.value for v in vals}
-            result.append({
-                "sale_id": sid,
-                "created_at": sale.created_at.isoformat(),
-                "data": data,
-            })
-    return result
+# API: price words
+
+@app.get("/api/price-to-words")
+def price_to_words(price: str = "", user: User = Depends(require_user)):
+    try:
+        p = int(price)
+    except (ValueError, TypeError):
+        return {"words": ""}
+    return {"words": number_to_persian(p) + " تومان"}
 
 
-@app.post("/api/sales/export.csv")
-async def sales_export(request: Request, _: AdminSession = Depends(check_admin)):
-    body = await request.json()
-    ids = _query_sale_ids(body)
-    with Session(engine) as s:
-        columns = _get_columns(s)
-        buf = io.StringIO()
-        buf.write("\ufeff")  # BOM for Excel persian
-        writer = csv.writer(buf)
-        writer.writerow(["شماره", "تاریخ"] + [c.name for c in columns])
-        for sid in ids:
-            sale = s.get(Sale, sid)
-            if not sale:
-                continue
-            vals = {v.column_id: v.value for v in s.exec(
-                select(SaleValue).where(SaleValue.sale_id == sid)
-            ).all()}
-            row = [sid, sale.created_at.strftime("%Y-%m-%d %H:%M")]
-            for c in columns:
-                row.append(vals.get(c.id, ""))
-            writer.writerow(row)
+# API: save sale
 
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="sales.csv"'},
-    )
+ALLOWED_SOURCES = {"quick", "full"}
 
-# API: admin actions (column/product CRUD by CSRF)
-@app.post("/api/column/add")
-async def add_column(request: Request, _: AdminSession = Depends(check_admin)):
+
+@app.post("/api/sale")
+async def save_sale(request: Request, user: User = Depends(require_user)):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
+
+    raw_source = str(form.get("source", "") or "").strip()
+    source = raw_source if raw_source in ALLOWED_SOURCES else "quick"
+
+    # چک permission بر اساس source
+    needed = "quick_sale" if source == "quick" else "full_sale"
+    if not user.has_permission(needed):
+        raise HTTPException(403, "دسترسی به این فرم را ندارید")
+
     with Session(engine) as s:
+        columns = _get_columns(s)
+        values: dict[int, str] = {}
+        for key, raw in form.items():
+            if not key.startswith("col_"):
+                continue
+            try:
+                cid = int(key.replace("col_", "", 1))
+            except ValueError:
+                continue
+            val = str(raw).strip()
+            if val:
+                values[cid] = val
+
+        missing = [c.name for c in columns if c.required and not values.get(c.id)]
+        if missing:
+            raise HTTPException(status_code=400, detail="فیلدهای اجباری خالی: " + "، ".join(missing))
+
+        sale = Sale(created_by_id=user.id)
+        s.add(sale)
+        s.commit()
+        s.refresh(sale)
+        for cid, val in values.items():
+            s.add(SaleValue(sale_id=sale.id, column_id=cid, value=val))
+        s.commit()
+
+        sale_id = sale.id
+
+    write_audit(engine, request, "sale.create", user=user, target_type="sale", target_id=sale_id)
+    return RedirectResponse(f"/{source}", status_code=303)
+
+
+# API: delete sale
+
+@app.post("/api/sale/delete")
+async def delete_sale(request: Request, user: User = Depends(require_permission("view_sales"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    try:
+        sid = int(str(form.get("sale_id")))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "شناسه فروش نامعتبره")
+
+    with Session(engine) as s:
+        sale = s.get(Sale, sid)
+        if not sale:
+            raise HTTPException(404, "فروش پیدا نشد")
+        vals = s.exec(select(SaleValue).where(SaleValue.sale_id == sid)).all()
+
+        backup = {
+            "sale": {
+                "id": sale.id,
+                "created_at": sale.created_at.isoformat(),
+                "created_by_id": sale.created_by_id,
+                "note": sale.note,
+            },
+            "values": [{"column_id": v.column_id, "value": v.value} for v in vals],
+        }
+        s.add(DeletedSale(
+            original_sale_id=sid,
+            data_json=json.dumps(backup, ensure_ascii=False),
+            deleted_by_id=user.id,
+        ))
+
+        for v in vals:
+            s.delete(v)
+        s.delete(sale)
+        s.commit()
+
+    write_audit(engine, request, "sale.delete", user=user, target_type="sale", target_id=sid)
+    return RedirectResponse("/sales", status_code=303)
+
+
+# API: search products
+
+@app.get("/api/search-products")
+def search_products(q: str = "", user: User = Depends(require_user)):
+    with Session(engine) as s:
+        if q:
+            stmt = select(Product).where(Product.name.like(f"%{_escape_like(q)}%", escape="\\"))
+            products = s.exec(stmt).all()
+        else:
+            products = s.exec(select(Product).order_by(Product.name)).all()
+        return [{"id": p.id, "name": p.name} for p in products]
+
+
+# API: columns list
+
+@app.get("/api/columns")
+def list_columns(user: User = Depends(require_user)):
+    with Session(engine) as s:
+        cols = _get_columns(s)
+        return [{"id": c.id, "name": c.name, "type": c.type, "options": c.options} for c in cols]
+
+
+# API: advanced search
+
+@app.post("/api/search-advanced")
+async def search_advanced(request: Request, user: User = Depends(require_permission("search"))):
+    verify_csrf_header(request)
+    body = await request.json()
+    filters = body.get("filters", [])
+    with Session(engine) as s:
+        all_sales = s.exec(select(Sale.id)).all()
+        result: set[int] | None = None
+
+        for i, f in enumerate(filters):
+            try:
+                cid = int(f["colId"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            op = f.get("op", "=")
+            val = str(f.get("value", ""))
+            logic = (f.get("logic") or "AND").upper() if i > 0 else "AND"
+
+            stmt = select(SaleValue.sale_id).where(SaleValue.column_id == cid)
+            if op == "=":
+                stmt = stmt.where(SaleValue.value == val)
+            elif op == "like":
+                stmt = stmt.where(SaleValue.value.like(f"%{_escape_like(val)}%", escape="\\"))
+            elif op in (">", "<", ">=", "<="):
+                try:
+                    num = float(val)
+                except ValueError:
+                    continue
+                col_as_num = cast(SaleValue.value, Float)
+                stmt = stmt.where({
+                    ">": col_as_num > num, "<": col_as_num < num,
+                    ">=": col_as_num >= num, "<=": col_as_num <= num,
+                }[op])
+
+            ids = set(s.exec(stmt).all())
+            if result is None:
+                result = ids
+            elif logic == "OR":
+                result |= ids
+            elif logic == "NOT":
+                result -= ids
+            else:
+                result &= ids
+
+            if result == set():
+                break
+
+        if result is None:
+            result = set(all_sales)
+
+        columns = {c.id: c.name for c in _get_columns(s)}
+        sales_out = []
+        for sid in sorted(result, reverse=True)[:100]:
+            values = s.exec(select(SaleValue).where(SaleValue.sale_id == sid)).all()
+            data = {columns.get(v.column_id, f"ستون {v.column_id}"): v.value for v in values}
+            sales_out.append({"sale_id": sid, "data": data})
+        return sales_out
+
+
+# API: admin (columns & products)
+
+@app.post("/api/column/add")
+async def add_column(request: Request, user: User = Depends(require_permission("manage_columns"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    name = str(form.get("name", "")).strip() or "ستون جدید"
+    with Session(engine) as s:
+        if s.exec(select(Column).where(Column.name == name)).first():
+            raise HTTPException(400, f"ستون با نام «{name}» وجود داره")
         col = Column(
-            name=str(form.get("name", "ستون جدید")).strip() or "ستون جدید",
+            name=name,
             type=str(form.get("type", "text")),
             options=str(form.get("options")) or None,
             required=form.get("required") == "on",
@@ -605,11 +854,14 @@ async def add_column(request: Request, _: AdminSession = Depends(check_admin)):
         )
         s.add(col)
         s.commit()
+        cid = col.id
+    write_audit(engine, request, "column.create", user=user, target_type="column", target_id=cid,
+                metadata_json=json.dumps({"name": name}, ensure_ascii=False))
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/api/column/delete")
-async def delete_column(request: Request, _: AdminSession = Depends(check_admin)):
+async def delete_column(request: Request, user: User = Depends(require_permission("manage_columns"))):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
     try:
@@ -623,24 +875,28 @@ async def delete_column(request: Request, _: AdminSession = Depends(check_admin)
                 s.delete(v)
             s.delete(col)
             s.commit()
+    write_audit(engine, request, "column.delete", user=user, target_type="column", target_id=cid)
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/api/product/add")
-async def add_product(request: Request, _: AdminSession = Depends(check_admin)):
+async def add_product(request: Request, user: User = Depends(require_permission("manage_products"))):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
     name = str(form.get("name", "")).strip()
     if name:
         with Session(engine) as s:
             if not s.exec(select(Product).where(Product.name == name)).first():
-                s.add(Product(name=name))
+                p = Product(name=name)
+                s.add(p)
                 s.commit()
+                write_audit(engine, request, "product.create", user=user, target_type="product",
+                            target_id=p.id, metadata_json=json.dumps({"name": name}, ensure_ascii=False))
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/api/product/delete")
-async def delete_product(request: Request, _: AdminSession = Depends(check_admin)):
+async def delete_product(request: Request, user: User = Depends(require_permission("manage_products"))):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
     try:
@@ -652,65 +908,338 @@ async def delete_product(request: Request, _: AdminSession = Depends(check_admin
         if prod:
             s.delete(prod)
             s.commit()
+            write_audit(engine, request, "product.delete", user=user, target_type="product", target_id=pid)
     return RedirectResponse("/admin", status_code=303)
 
 
-# API: sale delete
-@app.post("/api/sale/delete")
-async def delete_sale(request: Request, _: AdminSession = Depends(check_admin)):
+# Owner: dashboard
+
+@app.get("/owner", response_class=HTMLResponse)
+def owner_dashboard(request: Request, user: User = Depends(require_owner)):
+    with Session(engine) as s:
+        users_count = s.exec(select(func.count(User.id)).where(User.is_deleted == False)).one()  # type: ignore
+        audit_count = s.exec(select(func.count(AuditLog.id))).one()
+        deleted_count = s.exec(select(func.count(DeletedSale.id))).one()
+    return render(request, "owner/dashboard.html",
+                  users_count=users_count, audit_count=audit_count, deleted_count=deleted_count)
+
+
+# Owner: users
+
+@app.get("/owner/users", response_class=HTMLResponse)
+def owner_users(request: Request, user: User = Depends(require_owner)):
+    with Session(engine) as s:
+        users = s.exec(
+            select(User).where(User.is_deleted == False).order_by(desc(User.created_at))
+        ).all()
+    return render(request, "owner/users.html", users=users)
+
+
+@app.get("/owner/users/new", response_class=HTMLResponse)
+def owner_user_new(request: Request, user: User = Depends(require_owner)):
+    return render(request, "owner/user_form.html", mode="new", u=None)
+
+
+@app.post("/api/owner/users/add")
+async def owner_user_add(request: Request, user: User = Depends(require_owner)):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
-    try:
-        sid = int(str(form.get("sale_id")))
-    except (ValueError, TypeError):
-        raise HTTPException(400, "شناسه فروش نامعتبره")
+
+    username = str(form.get("username", "")).strip()
+    password = str(form.get("password", ""))
+    full_name = str(form.get("full_name", "")).strip() or None
+
+    if not username or not password:
+        raise HTTPException(400, "نام کاربری و رمز اجباری است")
+    if len(password) < 4:
+        raise HTTPException(400, "رمز باید حداقل ۴ کاراکتر باشد")
+
     with Session(engine) as s:
-        for v in s.exec(select(SaleValue).where(SaleValue.sale_id == sid)).all():
-            s.delete(v)
-        sale = s.get(Sale, sid)
-        if sale:
-            s.delete(sale)
+        if s.exec(select(User).where(User.username == username)).first():
+            raise HTTPException(400, "این نام کاربری قبلاً استفاده شده")
+
+        new_user = User(
+            username=username,
+            password_hash=hash_password(password),
+            full_name=full_name,
+            role="admin",
+            is_active=True,
+            can_quick_sale=form.get("can_quick_sale") == "on",
+            can_full_sale=form.get("can_full_sale") == "on",
+            can_search=form.get("can_search") == "on",
+            can_view_reports=form.get("can_view_reports") == "on",
+            can_view_sales=form.get("can_view_sales") == "on",
+            can_manage_columns=form.get("can_manage_columns") == "on",
+            can_manage_products=form.get("can_manage_products") == "on",
+            can_view_current_columns=form.get("can_view_current_columns") == "on",
+        )
+        s.add(new_user)
         s.commit()
-    return RedirectResponse("/sales", status_code=303)
+        new_id = new_user.id
+
+    write_audit(engine, request, "user.create", user=user, target_type="user", target_id=new_id,
+                metadata_json=json.dumps({"username": username}, ensure_ascii=False))
+    return RedirectResponse("/owner/users", status_code=303)
 
 
-# API: reports
-@app.get("/api/reports/data")
-def reports_data(_: AdminSession = Depends(check_admin)):
+@app.get("/owner/users/{user_id}/edit", response_class=HTMLResponse)
+def owner_user_edit(user_id: int, request: Request, user: User = Depends(require_owner)):
     with Session(engine) as s:
-        total_sales = s.exec(select(func.count(Sale.id))).one()
-        product_col = s.exec(select(Column).where(Column.type == "product")).first()
-        gender_col = s.exec(select(Column).where(Column.type == "choice")).first()
-
-        products, genders = [], []
-        if product_col:
-            rows = s.exec(
-                select(SaleValue.value, func.count(SaleValue.id))
-                .where(SaleValue.column_id == product_col.id)
-                .group_by(SaleValue.value)
-                .order_by(func.count(SaleValue.id).desc())
-                .limit(10)
-            ).all()
-            products = [{"name": r[0], "count": r[1]} for r in rows]
-        if gender_col:
-            rows = s.exec(
-                select(SaleValue.value, func.count(SaleValue.id))
-                .where(SaleValue.column_id == gender_col.id)
-                .group_by(SaleValue.value)
-            ).all()
-            genders = [{"name": r[0], "count": r[1]} for r in rows]
-
-        return {"total_sales": total_sales, "products": products, "genders": genders}
+        u = s.get(User, user_id)
+    if not u or u.is_deleted:
+        raise HTTPException(404, "کاربر پیدا نشد")
+    return render(request, "owner/user_form.html", mode="edit", u=u)
 
 
-# API: backup
+@app.post("/api/owner/users/{user_id}/update")
+async def owner_user_update(user_id: int, request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+
+    with Session(engine) as s:
+        u = s.get(User, user_id)
+        if not u or u.is_deleted:
+            raise HTTPException(404, "کاربر پیدا نشد")
+        if u.role == "owner":
+            raise HTTPException(400, "برای ویرایش مالک از صفحه‌ی دیگری استفاده کنید")
+
+        new_username = str(form.get("username", "")).strip()
+        if not new_username:
+            raise HTTPException(400, "نام کاربری نمی‌تواند خالی باشد")
+        
+        other = s.exec(select(User).where(User.username == new_username, User.id != user_id)).first()
+        if other:
+            raise HTTPException(400, "این نام کاربری قبلاً استفاده شده")
+
+        u.username = new_username
+        u.full_name = str(form.get("full_name", "")).strip() or None
+        u.can_quick_sale = form.get("can_quick_sale") == "on"
+        u.can_full_sale = form.get("can_full_sale") == "on"
+        u.can_search = form.get("can_search") == "on"
+        u.can_view_reports = form.get("can_view_reports") == "on"
+        u.can_view_sales = form.get("can_view_sales") == "on"
+        u.can_manage_columns = form.get("can_manage_columns") == "on"
+        u.can_manage_products = form.get("can_manage_products") == "on"
+        u.can_view_current_columns = form.get("can_view_current_columns") == "on"
+        s.add(u)
+        s.commit()
+
+    write_audit(engine, request, "user.update", user=user, target_type="user", target_id=user_id,
+                metadata_json=json.dumps({"username": new_username}, ensure_ascii=False))
+    return RedirectResponse("/owner/users", status_code=303)
+
+
+@app.post("/api/owner/users/{user_id}/toggle-active")
+async def owner_user_toggle(user_id: int, request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        u = s.get(User, user_id)
+        if not u or u.is_deleted:
+            raise HTTPException(404, "کاربر پیدا نشد")
+        if u.role == "owner":
+            raise HTTPException(400, "مالک را نمی‌توان تعلیق کرد")
+        u.is_active = not u.is_active
+        s.add(u)
+        if not u.is_active:
+            for sess in s.exec(select(UserSession).where(UserSession.user_id == user_id)).all():
+                s.delete(sess)
+        s.commit()
+        action = "user.activate" if u.is_active else "user.suspend"
+    write_audit(engine, request, action, user=user, target_type="user", target_id=user_id)
+    return RedirectResponse("/owner/users", status_code=303)
+
+
+@app.post("/api/owner/users/{user_id}/delete")
+async def owner_user_delete(user_id: int, request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        u = s.get(User, user_id)
+        if not u or u.is_deleted:
+            raise HTTPException(404, "کاربر پیدا نشد")
+        if u.role == "owner":
+            raise HTTPException(400, "مالک را نمی‌توان حذف کرد")
+        u.is_deleted = True
+        u.is_active = False
+        s.add(u)
+
+        for sess in s.exec(select(UserSession).where(UserSession.user_id == user_id)).all():
+            s.delete(sess)
+        s.commit()
+    write_audit(engine, request, "user.delete", user=user, target_type="user", target_id=user_id)
+    return RedirectResponse("/owner/users", status_code=303)
+
+
+@app.post("/api/owner/users/{user_id}/reset-password")
+async def owner_user_reset_pw(user_id: int, request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    new_pw = str(form.get("new_password", ""))
+    if len(new_pw) < 4:
+        raise HTTPException(400, "رمز باید حداقل ۴ کاراکتر باشد")
+
+    with Session(engine) as s:
+        u = s.get(User, user_id)
+        if not u or u.is_deleted:
+            raise HTTPException(404, "کاربر پیدا نشد")
+        if u.role == "owner":
+            raise HTTPException(400, "برای تغییر رمز مالک از /me/password استفاده کنید")
+        u.password_hash = hash_password(new_pw)
+        s.add(u)
+
+        for sess in s.exec(select(UserSession).where(UserSession.user_id == user_id)).all():
+            s.delete(sess)
+        s.commit()
+
+    write_audit(engine, request, "user.password_change", user=user, target_type="user", target_id=user_id)
+    return RedirectResponse("/owner/users", status_code=303)
+
+
+# Owner: settings
+
+@app.get("/owner/settings", response_class=HTMLResponse)
+def owner_settings(request: Request, user: User = Depends(require_owner)):
+    with Session(engine) as s:
+        settings = s.exec(select(StoreSettings)).first()
+    return render(request, "owner/settings.html", settings=settings)
+
+
+@app.post("/api/owner/settings/update")
+async def owner_settings_update(request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+
+    name = str(form.get("name", "")).strip()
+    if not name:
+        raise HTTPException(400, "نام فروشگاه اجباری است")
+
+    with Session(engine) as s:
+        settings = s.exec(select(StoreSettings)).first()
+        if not settings:
+            settings = StoreSettings(name=name)
+        settings.name = name
+        settings.owner_name = str(form.get("owner_name", "")).strip() or None
+        settings.phone = str(form.get("phone", "")).strip() or None
+        settings.address = str(form.get("address", "")).strip() or None
+        settings.currency = str(form.get("currency", "")).strip() or "تومان"
+        settings.updated_at = utcnow()
+        s.add(settings)
+        s.commit()
+
+    write_audit(engine, request, "settings.update", user=user)
+    return RedirectResponse("/owner/settings", status_code=303)
+
+
+# Owner: audit log
+
+@app.get("/owner/audit", response_class=HTMLResponse)
+def owner_audit(
+    request: Request,
+    user: User = Depends(require_owner),
+    q: str = "",
+    action: str = "",
+    offset: int = 0,
+):
+    PAGE_SIZE = 100
+    with Session(engine) as s:
+        stmt = select(AuditLog).order_by(desc(AuditLog.created_at))
+        if q:
+            stmt = stmt.where(AuditLog.username_snapshot.like(f"%{_escape_like(q)}%", escape="\\"))
+        if action:
+            stmt = stmt.where(AuditLog.action == action)
+        total = s.exec(select(func.count()).select_from(AuditLog)).one()
+        logs = s.exec(stmt.offset(offset).limit(PAGE_SIZE)).all()
+
+        actions = [r[0] for r in s.exec(select(AuditLog.action).distinct().order_by(AuditLog.action)).all()]
+
+    return render(request, "owner/audit.html",
+                  logs=logs, total=total, offset=offset, page_size=PAGE_SIZE,
+                  q=q, action=action, actions=actions)
+
+
+# Owner: deleted sales
+
+@app.get("/owner/deleted-sales", response_class=HTMLResponse)
+def owner_deleted_sales(request: Request, user: User = Depends(require_owner)):
+    with Session(engine) as s:
+        deleted = s.exec(select(DeletedSale).order_by(desc(DeletedSale.deleted_at))).all()
+
+        enriched = []
+        for d in deleted:
+            try:
+                data = json.loads(d.data_json)
+            except Exception:
+                data = {}
+            enriched.append({
+                "id": d.id,
+                "original_sale_id": d.original_sale_id,
+                "deleted_at": d.deleted_at,
+                "deleted_by_id": d.deleted_by_id,
+                "original_created_at": data.get("sale", {}).get("created_at"),
+            })
+    return render(request, "owner/deleted_sales.html", deleted=enriched)
+
+
+@app.post("/api/owner/deleted-sales/{did}/restore")
+async def owner_restore_sale(did: int, request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+
+    with Session(engine) as s:
+        d = s.get(DeletedSale, did)
+        if not d:
+            raise HTTPException(404, "رکورد پیدا نشد")
+        try:
+            data = json.loads(d.data_json)
+        except Exception:
+            raise HTTPException(400, "داده بک‌آپ خراب است")
+
+        sale_info = data.get("sale", {})
+        
+        target_id = d.original_sale_id
+        if s.get(Sale, target_id):
+            target_id = None
+
+        sale = Sale(
+            id=target_id,
+            created_at=datetime.fromisoformat(sale_info["created_at"]) if sale_info.get("created_at") else utcnow(),
+            created_by_id=sale_info.get("created_by_id"),
+            note=sale_info.get("note"),
+        )
+        s.add(sale)
+        s.commit()
+        s.refresh(sale)
+
+        for v in data.get("values", []):
+            s.add(SaleValue(
+                sale_id=sale.id,
+                column_id=v["column_id"],
+                value=v["value"],
+            ))
+        s.delete(d)
+        s.commit()
+        restored_id = sale.id
+
+    write_audit(engine, request, "sale.restore", user=user, target_type="sale", target_id=restored_id)
+    return RedirectResponse("/owner/deleted-sales", status_code=303)
+
+
+# Backup (owner-only)
+
+@app.get("/backup", response_class=HTMLResponse)
+def backup_page(request: Request, user: User = Depends(require_owner)):
+    return render(request, "backup.html")
+
+
 @app.get("/api/backup/download")
-def download_backup(_: AdminSession = Depends(check_admin)):
+def download_backup(request: Request, user: User = Depends(require_owner)):
+    write_audit(engine, request, "backup.download", user=user)
     return FileResponse("database.db", filename="backup.db")
 
 
 @app.post("/api/backup/restore")
-async def restore_backup(request: Request, _: AdminSession = Depends(check_admin)):
+async def restore_backup(request: Request, user: User = Depends(require_owner)):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
     file = form["file"]
@@ -720,7 +1249,6 @@ async def restore_backup(request: Request, _: AdminSession = Depends(check_admin
     if not content:
         raise HTTPException(400, "فایل خالیه")
 
-    import sqlite3
     tmp = "database.restore.tmp"
     with open(tmp, "wb") as f:
         f.write(content)
@@ -729,43 +1257,19 @@ async def restore_backup(request: Request, _: AdminSession = Depends(check_admin
         conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         conn.close()
     except sqlite3.DatabaseError:
-        import os
         os.remove(tmp)
         raise HTTPException(400, "فایل بک‌آپ معتبر نیست")
 
+    write_audit(engine, request, "backup.restore", user=user)
+
     engine.dispose()
-    import os
     os.replace(tmp, "database.db")
     engine.dispose()
     SQLModel.metadata.create_all(engine)
-    return RedirectResponse("/backup", status_code=303)
 
-
-# API: CSV export
-@app.get("/api/export/csv")
-def export_csv(_: AdminSession = Depends(check_admin)):
-    with Session(engine) as s:
-        columns = _get_columns(s)
-        sales = s.exec(select(Sale).order_by(Sale.id)).all()
-
-        buf = io.StringIO()
-        buf.write("\ufeff")
-        writer = csv.writer(buf)
-        writer.writerow(["شماره", "تاریخ"] + [c.name for c in columns])
-        for sale in sales:
-            values = {v.column_id: v.value for v in s.exec(
-                select(SaleValue).where(SaleValue.sale_id == sale.id)
-            ).all()}
-            row = [sale.id, sale.created_at.strftime("%Y-%m-%d %H:%M")]
-            for c in columns:
-                row.append(values.get(c.id, ""))
-            writer.writerow(row)
-
-        return Response(
-            content=buf.getvalue(),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": 'attachment; filename="sales.csv"'},
-        )
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
 
 
 if __name__ == "__main__":
