@@ -5,7 +5,6 @@
   <h2 class="h3 mb-0"><i class="bi bi-receipt"></i> فروش‌ها</h2>
 </div>
 
-<!-- فیلترها -->
 <div class="card shadow-sm mb-3">
   <div class="card-body">
     <div class="row g-2 mb-2">
@@ -70,7 +69,6 @@
   </div>
 </div>
 
-<!-- جدول -->
 <div class="card shadow-sm">
   <div class="card-body">
     <div class="table-responsive">
@@ -92,10 +90,11 @@
             <td>{{ sale.data.get(c.id, "") or "-" }}</td>
             {% endfor %}
             <td class="text-center">
-              <form method="POST" action="/api/sale/delete" class="d-inline">
+              <form method="POST" action="/api/sale/delete" class="d-inline"
+                    onsubmit="return confirm('فروش حذف و بایگانی بشه؟')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="sale_id" value="{{ sale.id }}">
-                <button class="btn btn-sm btn-danger" onclick="return confirm('حذف بشه؟')">
+                <button type="submit" class="btn btn-sm btn-danger">
                   <i class="bi bi-trash"></i>
                 </button>
               </form>
@@ -113,10 +112,7 @@
 
 {% block scripts %}
 <script>
-// cloumn list for create result
 const COLUMNS = {{ columns | map(attribute='id') | list | tojson }};
-const COLUMN_NAMES = {{ columns | map(attribute='name') | list | tojson }};
-
 let filters = [];
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -169,10 +165,16 @@ function getBody() {
 function applyFilters() {
     fetch('/api/sales/query', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.CSRF_TOKEN,
+        },
         body: JSON.stringify(getBody()),
     })
-    .then(r => r.json())
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
     .then(list => {
         const tbody = document.getElementById('sales-tbody');
         if (!list.length) {
@@ -186,9 +188,22 @@ function applyFilters() {
                 <td><span class="badge text-bg-secondary">#${sale.sale_id}</span></td>
                 <td>${dateStr}</td>
                 ${cells}
-                <td class="text-center text-body-secondary small">-</td>
+                <td class="text-center">
+                  <form method="POST" action="/api/sale/delete" class="d-inline"
+                        onsubmit="return confirm('حذف شود؟')">
+                    <input type="hidden" name="csrf_token" value="${window.CSRF_TOKEN}">
+                    <input type="hidden" name="sale_id" value="${sale.sale_id}">
+                    <button type="submit" class="btn btn-sm btn-danger">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                </td>
             </tr>`;
         }).join('');
+    })
+    .catch(err => {
+        console.error(err);
+        alert('خطا در فیلتر: ' + err.message);
     });
 }
 
@@ -203,7 +218,10 @@ function resetFilters() {
 function exportCSV() {
     fetch('/api/sales/export.csv', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.CSRF_TOKEN,
+        },
         body: JSON.stringify(getBody()),
     })
     .then(async r => {

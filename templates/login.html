@@ -6,6 +6,7 @@
   <title>ورود - ShopCRM</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link href="/static/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+  <link href="/static/vendor/vazirmatn/Vazirmatn-font-face.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bg-body-tertiary">
@@ -14,23 +15,20 @@
     <div class="card-body p-4">
       <div class="text-center mb-4">
         <div class="display-4">🔐</div>
-        <h1 class="h4 mt-2">ورود ادمین</h1>
+        <h1 class="h4 mt-2">ورود به ShopCRM</h1>
       </div>
       {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-      <form method="POST" action="/login">
+      <form method="POST" action="/login?next={{ (next or '')|urlencode }}">
         <div class="mb-3">
           <label class="form-label">نام کاربری</label>
-          <input type="text" class="form-control" name="username" required autofocus>
+          <input type="text" class="form-control" name="username" required autofocus autocomplete="username">
         </div>
         <div class="mb-3">
           <label class="form-label">رمز عبور</label>
-          <input type="password" class="form-control" name="password" required>
+          <input type="password" class="form-control" name="password" required autocomplete="current-password">
         </div>
         <button class="btn btn-primary w-100">ورود</button>
       </form>
-      <div class="text-center mt-3">
-        <a href="/" class="text-decoration-none">→ بازگشت به داشبورد</a>
-      </div>
     </div>
   </div>
 </div>

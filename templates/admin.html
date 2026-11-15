@@ -3,6 +3,7 @@
 {% block content %}
 <h2 class="h3 mb-4"><i class="bi bi-gear"></i> مدیریت</h2>
 
+{% if current_user.has_permission('manage_columns') %}
 <div class="card shadow-sm mb-4">
   <div class="card-header bg-primary text-white"><i class="bi bi-plus-circle"></i> افزودن ستون جدید</div>
   <div class="card-body">
@@ -34,13 +35,15 @@
       </div>
       <div class="form-check">
         <input class="form-check-input" type="checkbox" name="is_default" id="def">
-        <label class="form-check-label" for="def">در فرم سریع نمایش داده بشه</label>
+        <label class="form-check-label" for="def">در فرم سریع نمایش داده شود</label>
       </div>
       <button type="submit" class="btn btn-primary mt-3"><i class="bi bi-plus-lg"></i> اضافه کن</button>
     </form>
   </div>
 </div>
+{% endif %}
 
+{% if current_user.has_permission('manage_products') %}
 <div class="card shadow-sm mb-4">
   <div class="card-header bg-success text-white"><i class="bi bi-box"></i> مدیریت محصولات</div>
   <div class="card-body">
@@ -72,7 +75,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if current_user.has_permission('view_current_columns') or current_user.has_permission('manage_columns') %}
 <div class="card shadow-sm">
   <div class="card-header bg-secondary text-white"><i class="bi bi-list-check"></i> ستون‌های فعلی</div>
   <div class="card-body">
@@ -83,7 +88,9 @@
             <th>ترتیب</th><th>نام</th><th>نوع</th>
             <th class="text-center">اجباری</th>
             <th class="text-center">سریع</th>
+            {% if current_user.has_permission('manage_columns') %}
             <th class="text-center">حذف</th>
+            {% endif %}
           </tr>
         </thead>
         <tbody>
@@ -94,6 +101,7 @@
             <td><span class="badge text-bg-info">{{ col.type }}</span></td>
             <td class="text-center">{{ "✅" if col.required else "❌" }}</td>
             <td class="text-center">{{ "✅" if col.is_default else "❌" }}</td>
+            {% if current_user.has_permission('manage_columns') %}
             <td class="text-center">
               <form method="POST" action="/api/column/delete" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -103,13 +111,15 @@
                 </button>
               </form>
             </td>
+            {% endif %}
           </tr>
+          {% else %}
+          <tr><td colspan="6" class="text-center text-body-secondary py-3">هیچ ستونی وجود ندارد</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
 </div>
-
-<a href="/logout" class="btn btn-outline-danger mt-4"><i class="bi bi-box-arrow-right"></i> خروج</a>
+{% endif %}
 {% endblock %}

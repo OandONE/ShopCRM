@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ 'افزودن ادمین' if mode == 'new' else 'ویرایش ادمین' }} - ShopCRM{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header bg-primary text-white">
+        <i class="bi bi-{{ 'plus-circle' if mode == 'new' else 'pencil' }}"></i>
+        {{ 'افزودن ادمین جدید' if mode == 'new' else 'ویرایش ادمین' }}
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ '/api/owner/users/add' if mode == 'new' else '/api/owner/users/' ~ u.id ~ '/update' }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">نام کاربری <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" name="username" required
+                     value="{{ u.username if u else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">نام کامل (اختیاری)</label>
+              <input type="text" class="form-control" name="full_name"
+                     value="{{ u.full_name if u and u.full_name else '' }}">
+            </div>
+            {% if mode == 'new' %}
+            <div class="col-md-6">
+              <label class="form-label">رمز عبور <span class="text-danger">*</span></label>
+              <input type="password" class="form-control" name="password" required minlength="4" autocomplete="new-password">
+              <div class="form-text">حداقل ۴ کاراکتر</div>
+            </div>
+            {% endif %}
+          </div>
+
+          <hr class="my-4">
+          <h6 class="mb-3"><i class="bi bi-key"></i> دسترسی‌ها</h6>
+
+          {% set perms = [
+            ('can_quick_sale',           'فروش سریع',              'lightning-charge'),
+            ('can_full_sale',            'فروش کامل',              'pencil-square'),
+            ('can_search',               'جستجو',                  'search'),
+            ('can_view_reports',         'گزارش‌ها',               'graph-up'),
+            ('can_view_sales',           'لیست فروش‌ها',           'receipt'),
+            ('can_manage_columns',       'مدیریت ستون‌ها',          'columns'),
+            ('can_manage_products',      'مدیریت محصولات',          'box'),
+            ('can_view_current_columns', 'مشاهده ستون‌های فعلی',    'list-check'),
+          ] %}
+
+          <div class="row g-2">
+            {% for key, label, icon in perms %}
+            <div class="col-md-6">
+              <div class="form-check p-3 border rounded">
+                <input class="form-check-input" type="checkbox" name="{{ key }}" id="{{ key }}"
+                       {% if mode == 'new' %}
+                         {# default برای ادمین جدید: سریع، کامل، جستجو، محصولات #}
+                         {% if key in ['can_quick_sale', 'can_full_sale', 'can_search', 'can_manage_products'] %}checked{% endif %}
+                       {% elif u and u[key] %}checked{% endif %}>
+                <label class="form-check-label w-100" for="{{ key }}">
+                  <i class="bi bi-{{ icon }} me-1"></i> {{ label }}
+                </label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+
+          <div class="mt-4 d-flex gap-2">
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-check2-circle"></i> {{ 'افزودن' if mode == 'new' else 'ذخیره تغییرات' }}
+            </button>
+            <a href="/owner/users" class="btn btn-outline-secondary">انصراف</a>
+          </div>
+        </form>
+
+        {% if mode == 'edit' and u and u.role != 'owner' %}
+        <hr class="my-4">
+        <h6 class="mb-3"><i class="bi bi-key-fill text-warning"></i> تعیین رمز جدید (اختیاری)</h6>
+        <form method="POST" action="/api/owner/users/{{ u.id }}/reset-password" class="row g-2 align-items-end">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="col-md-8">
+            <label class="form-label small">رمز جدید برای {{ u.username }}</label>
+            <input type="password" class="form-control" name="new_password" required minlength="4" autocomplete="new-password">
+            <div class="form-text">با ذخیره، تمام سشن‌های فعال این کاربر باطل می‌شوند.</div>
+          </div>
+          <div class="col-md-4">
+            <button type="submit" class="btn btn-warning w-100" onclick="return confirm('رمز کاربر عوض شود؟')">
+              <i class="bi bi-arrow-repeat"></i> تغییر رمز
+            </button>
+          </div>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

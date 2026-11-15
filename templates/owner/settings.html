@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}تنظیمات فروشگاه - ShopCRM{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header bg-success text-white">
+        <i class="bi bi-shop"></i> تنظیمات فروشگاه
+      </div>
+      <div class="card-body">
+        <form method="POST" action="/api/owner/settings/update">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+          <div class="mb-3">
+            <label class="form-label">نام فروشگاه <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" name="name" required
+                   value="{{ settings.name if settings else 'ShopCRM' }}">
+          </div>
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">نام مالک (اختیاری)</label>
+              <input type="text" class="form-control" name="owner_name"
+                     value="{{ settings.owner_name or '' if settings else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">تلفن (اختیاری)</label>
+              <input type="text" class="form-control" name="phone" dir="ltr"
+                     value="{{ settings.phone or '' if settings else '' }}">
+            </div>
+          </div>
+
+          <div class="mb-3 mt-3">
+            <label class="form-label">آدرس (اختیاری)</label>
+            <textarea class="form-control" name="address" rows="2">{{ settings.address or '' if settings else '' }}</textarea>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">واحد پول</label>
+            <input type="text" class="form-control" name="currency"
+                   value="{{ settings.currency if settings else 'تومان' }}">
+          </div>
+
+          <button type="submit" class="btn btn-success">
+            <i class="bi bi-check2-circle"></i> ذخیره تنظیمات
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

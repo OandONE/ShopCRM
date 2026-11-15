@@ -40,3 +40,18 @@ body {
 .position-relative { position: relative !important; }
 .position-absolute { position: absolute !important; }
 .w-100 { width: 100% !important; }
+
+/* invalid cards in dashboard */
+.card-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+    position: relative;
+}
+.card-disabled::after {
+    content: "🔒";
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 1.2rem;
+    opacity: 0.8;
+}

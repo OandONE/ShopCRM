@@ -39,7 +39,6 @@
             <input type="text" class="form-control" name="col_{{ col.id }}"
                    {% if col.required %}required{% endif %} autocomplete="off">
 
-            <input type="hidden" name="source" value="quick">
 
           {% elif col.type == "number" %}
             {% if col.name == "قیمت (تومان)" %}
@@ -73,6 +72,8 @@
         </button>
         <a href="/quick" class="btn btn-outline-secondary">ریست</a>
       </div>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="source" value="quick">
     </form>
   </div>
 </div>

@@ -3,33 +3,99 @@
 {% block content %}
 <div class="mb-4">
   <h1 class="h2">🏠 داشبورد</h1>
-  <p class="text-body-secondary">به ShopCRM خوش اومدی</p>
+  <p class="text-body-secondary">
+    خوش اومدی <strong>{{ current_user.full_name or current_user.username }}</strong>
+    {% if current_user.is_owner() %}
+      <span class="badge text-bg-warning">مالک</span>
+    {% else %}
+      <span class="badge text-bg-info">ادمین</span>
+    {% endif %}
+    {% if settings %}· {{ settings.name }}{% endif %}
+  </p>
 </div>
 
+{% if is_default_pw %}
+<div class="alert alert-danger d-flex align-items-center">
+  <i class="bi bi-shield-exclamation fs-4 me-3"></i>
+  <div class="flex-grow-1">
+    <strong>⚠️ رمز پیش‌فرض!</strong>
+    هنوز از رمز پیش‌فرض استفاده می‌کنی. برای امنیت فروشگاه، همین حالا عوضش کن.
+  </div>
+  <a href="/me/password" class="btn btn-danger">
+    <i class="bi bi-key"></i> تغییر رمز
+  </a>
+</div>
+{% endif %}
+
+{% set cards = [
+  ("/quick",   "lightning-charge-fill", "warning", "فروش سریع",  "فقط فیلدهای ضروری", "quick_sale"),
+  ("/full",    "pencil-square",         "primary", "فروش کامل",  "همه اطلاعات",       "full_sale"),
+  ("/search",  "search",                "info",    "جستجو",      "فیلتر پیشرفته",     "search"),
+  ("/reports", "graph-up-arrow",        "success", "گزارش",      "نمودار و آمار",     "view_reports"),
+  ("/sales",   "receipt",               "secondary", "فروش‌ها",  "لیست، فیلتر و حذف", "view_sales"),
+] %}
+{% set admin_card = ("/admin", "gear-fill", "dark", "مدیریت", "ستون‌ها و محصولات", None) %}
+
 <div class="row g-3">
-  {% set links = [
-    ("/quick", "lightning-charge-fill", "warning", "فروش سریع", "فقط فیلدهای ضروری"),
-    ("/full", "pencil-square", "primary", "فروش کامل", "همه اطلاعات"),
-    ("/search", "search", "info", "جستجو", "فیلتر پیشرفته"),
-    ("/reports", "graph-up-arrow", "success", "گزارش", "نمودار و آمار"),
-    ("/sales", "receipt", "secondary", "فروش‌ها", "لیست و حذف"),
-    ("/admin", "gear-fill", "dark", "مدیریت", "ستون‌ها و محصولات"),
-    ("/backup", "hdd-fill", "danger", "بک‌آپ", "دانلود و بازیابی"),
-  ] %}
-  {% for href, icon, color, title, sub in links %}
+  {% for href, icon, color, title, sub, perm in cards %}
+    {% set allowed = current_user.has_permission(perm) %}
+    <div class="col-12 col-md-6 col-lg-4">
+      <a href="{{ href if allowed else '#' }}" class="text-decoration-none">
+        <div class="card h-100 shadow-sm border-0 {% if allowed %}card-hover{% else %}card-disabled{% endif %}">
+          <div class="card-body">
+            <div class="d-flex align-items-center mb-2">
+              <i class="bi bi-{{ icon }} fs-3 text-{{ color }} me-2"></i>
+              <h5 class="card-title mb-0 text-body">{{ title }}</h5>
+            </div>
+            <p class="card-text text-body-secondary small mb-0">{{ sub }}</p>
+          </div>
+        </div>
+      </a>
+    </div>
+  {% endfor %}
+
+  {% set admin_allowed = current_user.has_permission('manage_columns') or current_user.has_permission('manage_products') or current_user.has_permission('view_current_columns') %}
   <div class="col-12 col-md-6 col-lg-4">
-    <a href="{{ href }}" class="text-decoration-none">
-      <div class="card h-100 shadow-sm border-0 card-hover">
+    <a href="{{ admin_card[0] if admin_allowed else '#' }}" class="text-decoration-none">
+      <div class="card h-100 shadow-sm border-0 {% if admin_allowed %}card-hover{% else %}card-disabled{% endif %}">
         <div class="card-body">
           <div class="d-flex align-items-center mb-2">
-            <i class="bi bi-{{ icon }} fs-3 text-{{ color }} me-2"></i>
-            <h5 class="card-title mb-0 text-body">{{ title }}</h5>
+            <i class="bi bi-{{ admin_card[1] }} fs-3 text-{{ admin_card[2] }} me-2"></i>
+            <h5 class="card-title mb-0 text-body">{{ admin_card[3] }}</h5>
           </div>
-          <p class="card-text text-body-secondary small mb-0">{{ sub }}</p>
+          <p class="card-text text-body-secondary small mb-0">{{ admin_card[4] }}</p>
         </div>
       </div>
     </a>
   </div>
-  {% endfor %}
+
+  {% if current_user.is_owner() %}
+  <div class="col-12 col-md-6 col-lg-4">
+    <a href="/owner" class="text-decoration-none">
+      <div class="card h-100 shadow-sm border-0 card-hover">
+        <div class="card-body">
+          <div class="d-flex align-items-center mb-2">
+            <i class="bi bi-shield-lock fs-3 text-danger me-2"></i>
+            <h5 class="card-title mb-0 text-body">پنل مالک</h5>
+          </div>
+          <p class="card-text text-body-secondary small mb-0">کاربران، تنظیمات، لاگ‌ها</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-12 col-md-6 col-lg-4">
+    <a href="/backup" class="text-decoration-none">
+      <div class="card h-100 shadow-sm border-0 card-hover">
+        <div class="card-body">
+          <div class="d-flex align-items-center mb-2">
+            <i class="bi bi-hdd-fill fs-3 text-danger me-2"></i>
+            <h5 class="card-title mb-0 text-body">بک‌آپ</h5>
+          </div>
+          <p class="card-text text-body-secondary small mb-0">دانلود و بازیابی دیتابیس</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

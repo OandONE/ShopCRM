@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}لاگ فعالیت‌ها - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2 class="h3 mb-0"><i class="bi bi-journal-text"></i> لاگ فعالیت‌ها</h2>
+  <span class="text-body-secondary">مجموع: {{ total }} رویداد</span>
+</div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <form method="GET" action="/owner/audit" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small">نام کاربری</label>
+        <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="جستجو در نام کاربری...">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small">نوع عملیات</label>
+        <select class="form-select" name="action">
+          <option value="">— همه —</option>
+          {% for a in actions %}
+          <option value="{{ a }}" {% if a == action %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <button type="submit" class="btn btn-primary w-100"><i class="bi bi-funnel"></i> اعمال فیلتر</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm table-striped table-hover align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>زمان</th>
+            <th>کاربر</th>
+            <th>عملیات</th>
+            <th>هدف</th>
+            <th>وضعیت</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for log in logs %}
+          <tr>
+            <td class="text-nowrap small" data-timestamp="{{ log.created_at.isoformat() }}"></td>
+            <td><code>{{ log.username_snapshot }}</code></td>
+            <td><span class="badge text-bg-secondary">{{ log.action }}</span></td>
+            <td>
+              {% if log.target_type %}
+                <small>{{ log.target_type }}{% if log.target_id %} #{{ log.target_id }}{% endif %}</small>
+              {% else %}
+                <small class="text-muted">—</small>
+              {% endif %}
+            </td>
+            <td>
+              {% if log.success %}
+                <i class="bi bi-check-circle-fill text-success"></i>
+              {% else %}
+                <i class="bi bi-x-circle-fill text-danger" title="{{ log.error_message or '' }}"></i>
+              {% endif %}
+            </td>
+            <td><small dir="ltr">{{ log.ip_address or '—' }}</small></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="text-center text-body-secondary py-4">هیچ رویدادی ثبت نشده</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if total > page_size %}
+    <nav>
+      <ul class="pagination justify-content-center mt-3">
+        <li class="page-item {% if offset == 0 %}disabled{% endif %}">
+          <a class="page-link" href="?q={{ q|urlencode }}&action={{ action|urlencode }}&offset={{ [offset - page_size, 0]|max }}">
+            <i class="bi bi-chevron-right"></i> قبلی
+          </a>
+        </li>
+        <li class="page-item disabled">
+          <span class="page-link">
+            {{ offset + 1 }} تا {{ [offset + page_size, total]|min }} از {{ total }}
+          </span>
+        </li>
+        <li class="page-item {% if offset + page_size >= total %}disabled{% endif %}">
+          <a class="page-link" href="?q={{ q|urlencode }}&action={{ action|urlencode }}&offset={{ offset + page_size }}">
+            بعدی <i class="bi bi-chevron-left"></i>
+          </a>
+        </li>
+      </ul>
+    </nav>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}فروش‌های حذف‌شده - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2 class="h3 mb-0"><i class="bi bi-trash"></i> فروش‌های حذف‌شده</h2>
+</div>
+
+<div class="alert alert-info small">
+  <i class="bi bi-info-circle"></i>
+  هر فروشی که حذف می‌شود، کامل (به‌همراه تمام فیلدهایش) در این صفحه بایگانی می‌شود.
+  می‌توانید هر کدام را بازگردانی کنید.
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-striped table-hover align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>#</th>
+            <th>شماره فروش اصلی</th>
+            <th>تاریخ اصلی</th>
+            <th>تاریخ حذف</th>
+            <th class="text-center">بازیابی</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in deleted %}
+          <tr>
+            <td>{{ d.id }}</td>
+            <td><span class="badge text-bg-secondary">#{{ d.original_sale_id }}</span></td>
+            <td class="small" {% if d.original_created_at %}data-timestamp="{{ d.original_created_at }}"{% endif %}></td>
+            <td class="small" data-timestamp="{{ d.deleted_at.isoformat() }}"></td>
+            <td class="text-center">
+              <form method="POST" action="/api/owner/deleted-sales/{{ d.id }}/restore" class="d-inline"
+                    onsubmit="return confirm('این فروش بازگردانی شود؟')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-sm btn-success">
+                  <i class="bi bi-arrow-counterclockwise"></i> بازیابی
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="text-center text-body-secondary py-4">هیچ فروشی حذف نشده</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
