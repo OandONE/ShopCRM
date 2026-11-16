@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 
 def utcnow_naive() -> datetime:
-    """UTC بدون timezone - برای ذخیره در SQLite"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -16,12 +15,11 @@ class User(SQLModel, table=True):
     username: str = Field(unique=True, index=True)
     password_hash: str
     full_name: Optional[str] = None
-    role: str = Field(default="admin")  # "owner" | "admin"
+    role: str = Field(default="admin")
     is_active: bool = True
     is_deleted: bool = False
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
 
-    # Permissions
     can_quick_sale: bool = True
     can_full_sale: bool = True
     can_search: bool = True
@@ -83,7 +81,28 @@ class AuditLog(SQLModel, table=True):
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
 
 
-# Core data
+# Products (by price and history)
+
+class Product(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    name: str = Field(unique=True, index=True)
+    price: Optional[int] = None
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    updated_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+
+class ProductPriceHistory(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    product_id: int = Field(foreign_key="product.id", index=True)
+    old_price: Optional[int] = None
+    new_price: Optional[int] = None
+    changed_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    changed_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+
+
+# Columns (by scope)
 
 class Column(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
@@ -93,12 +112,10 @@ class Column(SQLModel, table=True):
     required: bool = False
     is_default: bool = False
     order: int = 0
+    scope: str = "sale"  # "sale" | "item"
 
 
-class Product(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
-    name: str = Field(unique=True, index=True)
-
+# Sales & Items
 
 class Sale(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
@@ -108,8 +125,30 @@ class Sale(SQLModel, table=True):
 
 
 class SaleValue(SQLModel, table=True):
+    """مقادیر ستون‌های scope=sale برای کل فاکتور"""
     id: int = Field(default=None, primary_key=True)
     sale_id: int = Field(foreign_key="sale.id", index=True)
+    column_id: int = Field(foreign_key="column.id", index=True)
+    value: str
+
+
+class SaleItem(SQLModel, table=True):
+    """هر قلم کالا در فاکتور"""
+    id: int = Field(default=None, primary_key=True)
+    sale_id: int = Field(foreign_key="sale.id", index=True)
+    product_id: Optional[int] = Field(default=None, foreign_key="product.id")
+    product_name: str
+    quantity: int = 1
+    db_unit_price: Optional[int] = None        # snapshot قیمت دیتابیس در لحظه فروش
+    manual_unit_price: int = 0                  # قیمت وارد‌شده توسط فروشنده
+    discount_per_unit: int = 0                  # تخفیف صریح هر واحد
+    final_unit_price: int = 0                   # manual - discount (محاسبه و ذخیره)
+
+
+class SaleItemValue(SQLModel, table=True):
+    """مقادیر ستون‌های scope=item (برای آینده)"""
+    id: int = Field(default=None, primary_key=True)
+    item_id: int = Field(foreign_key="saleitem.id", index=True)
     column_id: int = Field(foreign_key="column.id", index=True)
     value: str
 
@@ -120,3 +159,4 @@ class DeletedSale(SQLModel, table=True):
     data_json: str
     deleted_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     deleted_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    
