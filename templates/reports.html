@@ -4,11 +4,35 @@
 <h2 class="h3 mb-4"><i class="bi bi-graph-up-arrow"></i> گزارش‌ها</h2>
 
 <div class="row g-3 mb-4">
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="card bg-primary text-white shadow-sm">
       <div class="card-body">
-        <div class="small">کل فروش‌ها</div>
-        <div class="display-5 fw-bold" id="total-sales">-</div>
+        <div class="small opacity-75">تعداد فاکتورها</div>
+        <div class="display-6 fw-bold" id="stat-invoices">—</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-info text-white shadow-sm">
+      <div class="card-body">
+        <div class="small opacity-75">تعداد اقلام فروخته‌شده</div>
+        <div class="display-6 fw-bold" id="stat-items">—</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-success text-white shadow-sm">
+      <div class="card-body">
+        <div class="small opacity-75">درآمد کل</div>
+        <div class="display-6 fw-bold" id="stat-revenue">—</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-danger text-white shadow-sm">
+      <div class="card-body">
+        <div class="small opacity-75">تخفیف کل</div>
+        <div class="display-6 fw-bold" id="stat-discount">—</div>
       </div>
     </div>
   </div>
@@ -17,7 +41,7 @@
 <div class="row g-3">
   <div class="col-lg-6">
     <div class="card shadow-sm"><div class="card-body">
-      <h5>پرفروش‌ترین محصولات</h5>
+      <h5>پرفروش‌ترین کالاها (بر اساس تعداد)</h5>
       <canvas id="chart-products" height="220"></canvas>
     </div></div>
   </div>
@@ -29,29 +53,95 @@
   </div>
 </div>
 {% endblock %}
-
 {% block scripts %}
 <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
 <script>
-fetch('/api/reports/data').then(r => r.json()).then(data => {
-  document.getElementById('total-sales').textContent = data.total_sales;
+const fmt = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
-  new Chart(document.getElementById('chart-products'), {
+const PALETTE = [
+  '#4a6cf7', // blue
+  '#e74c3c', // red
+  '#20c997', // turquoise green
+  '#f39c12', // orange
+  '#9b59b6', // purple
+  '#1abc9c', // teal
+  '#e83e8c', // pink
+  '#fdcb6e', // yellow
+  '#6c5ce7', // dark purple
+  '#00b894', // green
+];
+
+function colorFor(index) {
+  return PALETTE[index % PALETTE.length];
+}
+
+function makeGradient(ctx, color) {
+
+  const g = ctx.createLinearGradient(0, 0, 0, 300);
+  g.addColorStop(0, color);
+  g.addColorStop(1, color + '99');
+  return g;
+}
+
+fetch('/api/reports/data').then(r => r.json()).then(data => {
+  document.getElementById('stat-invoices').textContent = fmt(data.total_sales);
+  document.getElementById('stat-items').textContent = fmt(data.total_items);
+  document.getElementById('stat-revenue').textContent = fmt(data.total_revenue) + ' ت';
+  document.getElementById('stat-discount').textContent = fmt(data.total_discount) + ' ت';
+
+  const productCanvas = document.getElementById('chart-products');
+  const pctx = productCanvas.getContext('2d');
+  const barColors = data.products.map((_, i) =>
+    makeGradient(pctx, colorFor(i))
+  );
+  const borderColors = data.products.map((_, i) => colorFor(i));
+
+  new Chart(productCanvas, {
     type: 'bar',
     data: {
       labels: data.products.map(p => p.name),
-      datasets: [{ label: 'تعداد', data: data.products.map(p => p.count), backgroundColor: '#4a6cf7' }]
+      datasets: [{
+        label: 'تعداد فروش',
+        data: data.products.map(p => p.count),
+        backgroundColor: barColors,
+        borderColor: borderColors,
+        borderWidth: 1,
+        borderRadius: 6,
+      }]
     },
-    options: { plugins: { legend: { display: false } }, responsive: true }
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `تعداد: ${fmt(ctx.parsed.y)} عدد`
+          }
+        }
+      },
+      responsive: true,
+      scales: {
+        y: { beginAtZero: true, ticks: { precision: 0 } }
+      }
+    }
   });
 
   new Chart(document.getElementById('chart-genders'), {
     type: 'doughnut',
     data: {
       labels: data.genders.map(g => g.name),
-      datasets: [{ data: data.genders.map(g => g.count), backgroundColor: ['#4a6cf7', '#e83e8c', '#20c997'] }]
+      datasets: [{
+        data: data.genders.map(g => g.count),
+        backgroundColor: data.genders.map((_, i) => colorFor(i)),
+        borderWidth: 2,
+        borderColor: '#fff',
+      }]
     },
-    options: { responsive: true }
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { position: 'bottom' }
+      }
+    }
   });
 });
 </script>

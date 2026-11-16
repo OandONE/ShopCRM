@@ -1,0 +1,200 @@
+<form id="invoice-form" data-kind="{{ form_kind }}" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <!-- تاریخ و ساعت -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-body">
+      <div id="datetime-display" class="d-flex align-items-center gap-2 flex-wrap">
+        <i class="bi bi-clock-history fs-5 text-primary"></i>
+        <span class="fw-semibold">تاریخ فاکتور:</span>
+        <span id="datetime-jalali" class="badge text-bg-light fs-6"></span>
+        <span id="datetime-edited-badge" class="badge text-bg-warning d-none">
+          <i class="bi bi-pencil"></i> دستکاری شده
+        </span>
+        <button type="button" id="datetime-edit" class="btn btn-sm btn-outline-secondary ms-auto">
+          <i class="bi bi-pencil"></i> ویرایش
+        </button>
+      </div>
+      <div id="datetime-editor" class="mt-2 d-none">
+        <input type="datetime-local" id="datetime-input" class="form-control">
+        <small id="datetime-jalali-preview" class="text-body-secondary d-block mt-1"></small>
+        <div class="mt-2">
+          <button type="button" id="datetime-apply" class="btn btn-sm btn-primary">
+            <i class="bi bi-check2"></i> تایید
+          </button>
+          <button type="button" id="datetime-cancel" class="btn btn-sm btn-outline-secondary">
+            انصراف
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- اطلاعات فاکتور (sale-scope) -->
+  {% if sale_columns %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-secondary text-white">
+      <i class="bi bi-info-circle"></i> اطلاعات فاکتور
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        {% for col in sale_columns %}
+        <div class="col-12 col-md-6">
+          <label class="form-label fw-semibold">
+            {{ col.name }}{% if col.required %}<span class="text-danger">*</span>{% endif %}
+          </label>
+          {% if col.type == "textarea" %}
+            <textarea class="form-control" rows="3" data-sale-col="{{ col.id }}"
+                      {% if col.required %}required{% endif %}></textarea>
+          {% elif col.type == "text" %}
+            <input type="text" class="form-control" data-sale-col="{{ col.id }}"
+                   {% if col.required %}required{% endif %}>
+          {% elif col.type == "number" %}
+            <input type="text" inputmode="numeric" class="form-control" data-sale-col="{{ col.id }}"
+                   {% if col.required %}required{% endif %}>
+          {% elif col.type == "choice" %}
+            <select class="form-select" data-sale-col="{{ col.id }}"
+                    {% if col.required %}required{% endif %}>
+              <option value="">— انتخاب کنید —</option>
+              {% for opt in (col.options or "").split(",") %}
+                {% set o = opt.strip() %}
+                {% if o %}<option value="{{ o }}">{{ o }}</option>{% endif %}
+              {% endfor %}
+            </select>
+          {% else %}
+            <input type="text" class="form-control" data-sale-col="{{ col.id }}"
+                   {% if col.required %}required{% endif %}>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- افزودن قلم -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-primary text-white">
+      <i class="bi bi-plus-circle"></i> افزودن کالا به سبد
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-4 product-wrapper" style="position:relative">
+          <label class="form-label">محصول</label>
+          <input type="text" id="add-product-search" class="form-control"
+                 placeholder="جستجو یا تایپ نام..." autocomplete="off">
+          <div id="add-product-dropdown" class="product-dropdown"
+               style="display:none;position:absolute;top:100%;left:0;right:0;
+                      background:var(--bs-body-bg,#fff);border:1px solid #ccc;
+                      border-radius:0 0 8px 8px;max-height:220px;overflow-y:auto;
+                      z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.15)"></div>
+          <input type="hidden" id="add-product-id">
+          <input type="hidden" id="add-product-name">
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">قیمت دیتابیس</label>
+          <input type="text" id="add-db-price" class="form-control" readonly
+                 placeholder="—">
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">قیمت فروش</label>
+          <input type="text" id="add-manual-price" class="form-control"
+                 inputmode="numeric" placeholder="۰">
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">تخفیف هر واحد</label>
+          <input type="text" id="add-discount" class="form-control"
+                 inputmode="numeric" value="0">
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">تعداد</label>
+          <input type="number" id="add-qty" class="form-control" value="1" min="1">
+        </div>
+
+        {% for col in item_columns %}
+        <div class="col-md-4">
+          <label class="form-label">
+            {{ col.name }}{% if col.required %}<span class="text-danger">*</span>{% endif %}
+          </label>
+          {% if col.type == "text" %}
+            <input type="text" class="form-control" data-item-col="{{ col.id }}">
+          {% elif col.type == "number" %}
+            <input type="text" inputmode="numeric" class="form-control" data-item-col="{{ col.id }}">
+          {% elif col.type == "choice" %}
+            <select class="form-select" data-item-col="{{ col.id }}">
+              <option value="">—</option>
+              {% for opt in (col.options or "").split(",") %}
+                {% set o = opt.strip() %}{% if o %}<option value="{{ o }}">{{ o }}</option>{% endif %}
+              {% endfor %}
+            </select>
+          {% else %}
+            <input type="text" class="form-control" data-item-col="{{ col.id }}">
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+
+      <button type="button" id="add-to-cart" class="btn btn-primary mt-3">
+        <i class="bi bi-cart-plus"></i> افزودن به سبد
+      </button>
+    </div>
+  </div>
+
+  <!-- سبد -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-success text-white">
+      <i class="bi bi-cart3"></i> سبد خرید (<span id="cart-count">0</span> قلم)
+    </div>
+    <div class="card-body">
+      <div id="cart-empty" class="text-center text-body-secondary py-4">
+        <i class="bi bi-cart-x fs-1 d-block mb-2"></i>
+        سبد خالی است
+      </div>
+      <div id="cart-table-wrap" class="table-responsive d-none">
+        <table class="table table-sm table-striped align-middle">
+          <thead class="table-dark">
+            <tr>
+              <th>کالا</th>
+              <th>تعداد</th>
+              <th>قیمت DB</th>
+              <th>قیمت فروش</th>
+              <th>تخفیف</th>
+              <th>جمع</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cart-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer bg-body-secondary">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <div class="d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-tag text-danger"></i> تخفیف کل:</span>
+            <strong id="total-discount" class="text-danger">۰ تومان</strong>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-cash-coin text-success"></i> مبلغ قابل پرداخت:</span>
+            <strong id="total-final" class="text-success fs-5">۰ تومان</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mb-4">
+    <button type="submit" id="submit-invoice" class="btn btn-primary btn-lg flex-grow-1" disabled>
+      <i class="bi bi-check2-circle"></i> ثبت فاکتور
+    </button>
+    <button type="button" id="clear-cart" class="btn btn-outline-danger btn-lg">
+      <i class="bi bi-trash"></i> پاک کردن
+    </button>
+  </div>
+</form>

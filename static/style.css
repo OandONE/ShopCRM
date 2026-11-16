@@ -55,3 +55,15 @@ body {
     font-size: 1.2rem;
     opacity: 0.8;
 }
+
+/* fields auto-filled (yellow) */
+.field-auto {
+  background-color: #fff8e1 !important;
+  border-color: #ffd54f !important;
+  transition: background-color 0.2s;
+}
+[data-bs-theme="dark"] .field-auto {
+  background-color: #4a3f00 !important;
+  border-color: #8a7500 !important;
+  color: #fff !important;
+}

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}فاکتور #{{ data.id }} - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h2 class="h3 mb-0">
+      <i class="bi bi-receipt"></i> فاکتور #{{ data.id }}
+    </h2>
+    <small class="text-body-secondary">
+      <span data-timestamp="{{ data.created_at.isoformat() }}"></span>
+      {% if data.creator_username %}
+      · ثبت‌شده توسط <code>{{ data.creator_username }}</code>
+      {% endif %}
+    </small>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="/sales" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right"></i> بازگشت
+    </a>
+    <form method="POST" action="/api/sale/delete"
+          onsubmit="return confirm('این فاکتور و تمام اقلامش حذف و بایگانی شود؟')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="sale_id" value="{{ data.id }}">
+      <button class="btn btn-danger"><i class="bi bi-trash"></i> حذف</button>
+    </form>
+  </div>
+</div>
+
+{% if data.sale_values %}
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-secondary text-white">
+    <i class="bi bi-info-circle"></i> اطلاعات فاکتور
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      {% for v in data.sale_values %}
+      <div class="col-md-4">
+        <div class="border rounded p-2">
+          <small class="text-body-secondary">{{ cols_by_id.get(v.column_id, '—') }}</small>
+          <div class="fw-semibold">{{ v.value }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-primary text-white">
+    <i class="bi bi-cart3"></i> اقلام
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-striped align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>کالا</th>
+            <th>تعداد</th>
+            <th>قیمت DB</th>
+            <th>قیمت فروش</th>
+            <th>تخفیف/واحد</th>
+            <th>جمع</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in data.items %}
+          <tr>
+            <td>{{ item.product_name }}</td>
+            <td>{{ item.quantity }}</td>
+            <td><small>{{ '{:,}'.format(item.db_unit_price) if item.db_unit_price is not none else '—' }}</small></td>
+            <td>{{ '{:,}'.format(item.manual_unit_price) }}</td>
+            <td>
+              {% if item.discount_per_unit > 0 %}
+                <span class="text-danger">{{ '{:,}'.format(item.discount_per_unit) }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td><strong>{{ '{:,}'.format(item.final_unit_price * item.quantity) }}</strong></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer bg-body-secondary">
+    <div class="d-flex justify-content-between">
+      <span>تعداد کل اقلام: <strong>{{ data.total_qty }}</strong></span>
+      <span class="text-danger">تخفیف کل: <strong>{{ '{:,}'.format(data.total_discount) }} تومان</strong></span>
+      <span class="text-success fs-5">قابل پرداخت: <strong>{{ '{:,}'.format(data.total_final) }} تومان</strong></span>
+    </div>
+  </div>
+</div>
+{% endblock %}

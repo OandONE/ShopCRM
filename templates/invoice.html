@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="invoice-toolbar no-print">
+  <button onclick="window.print()" class="btn-primary">🖨️ پرینت</button>
+  <button onclick="window.close()" class="btn">بستن</button>
+  <a href="/quick" class="btn" target="_blank">➕ فروش جدید</a>
+</div>
+
+<div class="invoice-page">
+  <header class="invoice-header">
+    <h1>{{ settings.name if settings else 'فروشگاه' }}</h1>
+    {% if settings and settings.phone %}<div class="sub">تلفن: {{ settings.phone }}</div>{% endif %}
+    <div class="invoice-meta">
+      <span>فاکتور شمارهٔ <strong>{{ sale.id }}</strong></span>
+      <span>{{ sale.created_at.strftime('%Y/%m/%d - %H:%M') }}</span>
+    </div>
+  </header>
+
+  <table class="invoice-table">
+    <thead>
+      <tr>
+        <th style="width:8%">#</th>
+        <th style="width:38%">کالا</th>
+        <th>تعداد</th>
+        <th>قیمت واحد</th>
+        <th>تخفیف واحد</th>
+        <th>جمع</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ it.product_name }}</td>
+        <td>{{ it.quantity }}</td>
+        <td>{{ "{:,}".format(it.manual_unit_price) }}</td>
+        <td>{{ "{:,}".format(it.discount_per_unit) }}</td>
+        <td>{{ "{:,}".format(it.final_unit_price * it.quantity) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="2">تعداد کل</td>
+        <td colspan="4">{{ total_qty }}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  {% if extras %}
+  <div class="invoice-extras">
+    {% for ex in extras %}
+      <div><strong>{{ ex.name }}:</strong> {{ ex.value }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="invoice-total">
+    {% if total_discount %}
+      <div class="discount">تخفیف کل: {{ "{:,}".format(total_discount) }} تومان</div>
+    {% endif %}
+    <div class="amount">مبلغ قابل پرداخت: {{ "{:,}".format(total_final) }} تومان</div>
+    <div class="words">{{ total_words }}</div>
+  </div>
+
+  <footer class="invoice-footer">
+    <p>با تشکر از خرید شما 🌹</p>
+    {% if settings and settings.address %}<p class="addr">{{ settings.address }}</p>{% endif %}
+  </footer>
+</div>
+
+<style>
+@page { size: A5; margin: 8mm; }
+
+.invoice-page {
+  max-width: 148mm; margin: 8mm auto; padding: 6mm;
+  background: #fff; border: 1px solid #ddd; border-radius: 4px;
+  font-family: Vazirmatn, Tahoma, sans-serif;
+  direction: rtl; color: #222; font-size: 10pt; line-height: 1.6;
+}
+.invoice-header { text-align: center; border-bottom: 2px solid #333;
+  padding-bottom: 3mm; margin-bottom: 4mm; }
+.invoice-header h1 { margin: 0; font-size: 15pt; }
+.invoice-header .sub { font-size: 8.5pt; color: #555; margin-top: 1mm; }
+.invoice-meta { display: flex; justify-content: space-between;
+  font-size: 9pt; margin-top: 3mm; }
+
+.invoice-table { width: 100%; border-collapse: collapse;
+  margin-top: 3mm; font-size: 9pt; }
+.invoice-table th, .invoice-table td {
+  border: 1px solid #888; padding: 2mm 2.5mm; text-align: right; }
+.invoice-table th { background: #f2f2f2; font-weight: 600; }
+.invoice-table tfoot td { background: #fafafa; font-weight: 600; }
+
+.invoice-extras { margin-top: 3mm; font-size: 9pt; color: #444; }
+.invoice-extras div { margin-bottom: 1mm; }
+
+.invoice-total { margin-top: 5mm; padding: 3mm;
+  border: 2px solid #333; border-radius: 4px; text-align: center; }
+.invoice-total .discount { font-size: 9pt; color: #b00; margin-bottom: 1.5mm; }
+.invoice-total .amount { font-size: 12pt; font-weight: 700; }
+.invoice-total .words { font-size: 9pt; color: #444; margin-top: 1.5mm; }
+
+.invoice-footer { margin-top: 8mm; text-align: center;
+  font-size: 8.5pt; color: #666; }
+.invoice-footer .addr { margin-top: 1mm; }
+
+.invoice-toolbar { max-width: 148mm; margin: 8mm auto 4mm;
+  display: flex; gap: 4mm; }
+
+@media print {
+  body { background: #fff !important; }
+  .no-print, nav, header.site-header, footer.site-footer { display: none !important; }
+  .invoice-page { margin: 0 auto; padding: 0; border: none; box-shadow: none;
+    max-width: 100%; }
+  .invoice-table th, .invoice-table tfoot td {
+    background: #eee !important; -webkit-print-color-adjust: exact; }
+}
+</style>
+
+{% endblock %}

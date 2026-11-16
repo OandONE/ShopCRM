@@ -2,7 +2,7 @@
 {% block title %}فروش‌ها - ShopCRM{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2 class="h3 mb-0"><i class="bi bi-receipt"></i> فروش‌ها</h2>
+  <h2 class="h3 mb-0"><i class="bi bi-receipt"></i> فاکتورها</h2>
 </div>
 
 <div class="card shadow-sm mb-3">
@@ -20,7 +20,7 @@
 
     <div class="row g-2 align-items-end">
       <div class="col-md-3">
-        <label class="form-label small">ستون</label>
+        <label class="form-label small">فیلد</label>
         <select id="filter-column" class="form-select"></select>
       </div>
       <div class="col-md-2">
@@ -63,7 +63,7 @@
         <i class="bi bi-x-circle"></i> پاک کردن
       </button>
       <button type="button" class="btn btn-success ms-auto" onclick="exportCSV()">
-        <i class="bi bi-file-earmark-spreadsheet"></i> خروجی اکسل (CSV)
+        <i class="bi bi-file-earmark-spreadsheet"></i> خروجی CSV
       </button>
     </div>
   </div>
@@ -75,33 +75,50 @@
       <table class="table table-striped table-hover align-middle">
         <thead class="table-dark">
           <tr>
-            <th>#</th>
+            <th>فاکتور</th>
             <th>تاریخ</th>
-            {% for c in columns %}<th>{{ c.name }}</th>{% endfor %}
-            <th class="text-center">حذف</th>
+            <th>کالا</th>
+            <th>تعداد</th>
+            <th>قیمت DB</th>
+            <th>قیمت فروش</th>
+            <th>تخفیف</th>
+            <th>جمع</th>
           </tr>
         </thead>
         <tbody id="sales-tbody">
           {% for sale in sales %}
-          <tr>
-            <td><span class="badge text-bg-secondary">#{{ sale.id }}</span></td>
-            <td data-timestamp="{{ sale.created_at.isoformat() }}"></td>
-            {% for c in columns %}
-            <td>{{ sale.data.get(c.id, "") or "-" }}</td>
+            {% for item in sale['values'] %}
+            <tr>
+              <td>
+                {% if loop.first %}
+                <a href="/sales/{{ sale.id }}" class="badge text-bg-secondary text-decoration-none">
+                  #{{ sale.id }}
+                </a>
+                {% else %}
+                <span class="badge text-bg-light text-secondary">↳</span>
+                {% endif %}
+              </td>
+              <td class="small">
+                {% if loop.first %}
+                <span data-timestamp="{{ sale.created_at.isoformat() }}"></span>
+                {% else %}—{% endif %}
+              </td>
+              <td>{{ item.product_name }}</td>
+              <td>{{ item.quantity }}</td>
+              <td><small>{{ '{:,}'.format(item.db_unit_price) if item.db_unit_price is not none else '—' }}</small></td>
+              <td>{{ '{:,}'.format(item.manual_unit_price) }}</td>
+              <td>
+                {% if item.discount_per_unit > 0 %}
+                  <span class="text-danger">{{ '{:,}'.format(item.discount_per_unit) }}</span>
+                {% else %}—{% endif %}
+              </td>
+              <td><strong>{{ '{:,}'.format(item.final_unit_price * item.quantity) }}</strong></td>
+            </tr>
             {% endfor %}
-            <td class="text-center">
-              <form method="POST" action="/api/sale/delete" class="d-inline"
-                    onsubmit="return confirm('فروش حذف و بایگانی بشه؟')">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="sale_id" value="{{ sale.id }}">
-                <button type="submit" class="btn btn-sm btn-danger">
-                  <i class="bi bi-trash"></i>
-                </button>
-              </form>
-            </td>
-          </tr>
           {% else %}
-          <tr><td colspan="{{ columns|length + 3 }}" class="text-center text-body-secondary py-4">هنوز فروشی ثبت نشده</td></tr>
+          <tr>
+            <td colspan="8" class="text-center text-body-secondary py-4">هنوز فاکتوری ثبت نشده</td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
@@ -112,130 +129,101 @@
 
 {% block scripts %}
 <script>
-const COLUMNS = {{ columns | map(attribute='id') | list | tojson }};
 let filters = [];
-
+let columnsCache = [];
+بنفش
 document.addEventListener('DOMContentLoaded', () => {
-    fetch('/api/columns')
-        .then(r => r.json())
-        .then(data => {
-            document.getElementById('filter-column').innerHTML =
-                data.map(c => `<option value="${c.id}">${c.name} (${c.type})</option>`).join('');
-        });
+  fetch('/api/columns').then(r => r.json()).then(data => {
+    columnsCache = data;
+    document.getElementById('filter-column').innerHTML = data.map(c => {
+      const scopeLabel = c.scope === 'item' ? ' [قلم]' : ' [فاکتور]';
+      return `<option value="${c.id}">${c.name}${scopeLabel}</option>`;
+    }).join('');
+  });
 });
 
 function addFilter() {
-    const sel = document.getElementById('filter-column');
-    const colId = sel.value;
-    const colName = sel.selectedOptions[0]?.text || '';
-    const op = document.getElementById('filter-op').value;
-    const value = document.getElementById('filter-value').value.trim();
-    const logic = filters.length > 0 ? document.getElementById('filter-logic').value : 'AND';
-    if (!colId || !value) return alert('ستون و مقدار الزامی است');
-    filters.push({colId, colName, op, value, logic});
-    document.getElementById('filter-value').value = '';
-    renderFilters();
+  const sel = document.getElementById('filter-column');
+  const colId = sel.value;
+  const colName = sel.selectedOptions[0]?.text || '';
+  const op = document.getElementById('filter-op').value;
+  const value = document.getElementById('filter-value').value.trim();
+  const logic = filters.length > 0 ? document.getElementById('filter-logic').value : 'AND';
+  if (!colId || !value) return alert('ستون و مقدار الزامی است');
+  filters.push({colId, colName, op, value, logic});
+  document.getElementById('filter-value').value = '';
+  renderFilters();
 }
 
 function removeFilter(i) {
-    filters.splice(i, 1);
-    if (filters.length > 0) filters[0].logic = 'AND';
-    renderFilters();
+  filters.splice(i, 1);
+  if (filters.length > 0) filters[0].logic = 'AND';
+  renderFilters();
 }
 
 function renderFilters() {
-    document.getElementById('active-filters').innerHTML = filters.map((f, i) => {
-        const opLabel = f.op === 'like' ? 'شامل' : f.op;
-        const logic = i > 0 ? `<strong>${f.logic}</strong> ` : '';
-        return `<span class="badge text-bg-primary me-1 mb-1">
-            ${logic}${f.colName} ${opLabel} "${f.value}"
-            <a href="#" onclick="removeFilter(${i});return false" class="text-white ms-1 text-decoration-none">✕</a>
-        </span>`;
-    }).join('');
+  document.getElementById('active-filters').innerHTML = filters.map((f, i) => {
+    const opLabel = f.op === 'like' ? 'شامل' : f.op;
+    const logic = i > 0 ? `<strong>${f.logic}</strong> ` : '';
+    return `<span class="badge text-bg-primary me-1 mb-1">
+      ${logic}${f.colName} ${opLabel} "${f.value}"
+      <a href="#" onclick="removeFilter(${i});return false" class="text-white ms-1 text-decoration-none">✕</a>
+    </span>`;
+  }).join('');
 }
 
 function getBody() {
-    return {
-        from_date: document.getElementById('from-date').value,
-        to_date: document.getElementById('to-date').value,
-        filters: filters,
-    };
+  return {
+    from_date: document.getElementById('from-date').value,
+    to_date: document.getElementById('to-date').value,
+    filters: filters,
+  };
 }
 
 function applyFilters() {
-    fetch('/api/sales/query', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': window.CSRF_TOKEN,
-        },
-        body: JSON.stringify(getBody()),
-    })
-    .then(r => {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-    })
-    .then(list => {
-        const tbody = document.getElementById('sales-tbody');
-        if (!list.length) {
-            tbody.innerHTML = `<tr><td colspan="${COLUMNS.length + 3}" class="text-center text-body-secondary py-4">موردی یافت نشد</td></tr>`;
-            return;
-        }
-        tbody.innerHTML = list.map(sale => {
-            const cells = COLUMNS.map(cid => `<td>${sale.data[String(cid)] || ''}</td>`).join('');
-            const dateStr = formatJalali(sale.created_at);
-            return `<tr>
-                <td><span class="badge text-bg-secondary">#${sale.sale_id}</span></td>
-                <td>${dateStr}</td>
-                ${cells}
-                <td class="text-center">
-                  <form method="POST" action="/api/sale/delete" class="d-inline"
-                        onsubmit="return confirm('حذف شود؟')">
-                    <input type="hidden" name="csrf_token" value="${window.CSRF_TOKEN}">
-                    <input type="hidden" name="sale_id" value="${sale.sale_id}">
-                    <button type="submit" class="btn btn-sm btn-danger">
-                      <i class="bi bi-trash"></i>
-                    </button>
-                  </form>
-                </td>
-            </tr>`;
-        }).join('');
-    })
-    .catch(err => {
-        console.error(err);
-        alert('خطا در فیلتر: ' + err.message);
-    });
+  fetch('/api/sales/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN },
+    body: JSON.stringify(getBody()),
+  })
+  .then(r => r.json())
+  .then(list => {
+    const tbody = document.getElementById('sales-tbody');
+    if (!list.length) {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-body-secondary py-4">موردی یافت نشد</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = list.map(s => {
+      const dateStr = formatJalali(s.created_at);
+      const fmt = n => n != null ? String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '—';
+      return `<tr>
+        <td><a href="/sales/${s.sale_id}" class="badge text-bg-secondary text-decoration-none">#${s.sale_id}</a></td>
+        <td class="small">${dateStr}</td>
+        <td colspan="5" class="text-body-secondary small">${s.items_summary}</td>
+        <td><strong>${fmt(s.total_final)}</strong></td>
+      </tr>`;
+    }).join('');
+  });
 }
 
-function resetFilters() {
-    filters = [];
-    renderFilters();
-    document.getElementById('from-date').value = '';
-    document.getElementById('to-date').value = '';
-    location.reload();
-}
+function resetFilters() { filters = []; renderFilters(); location.reload(); }
 
 function exportCSV() {
-    fetch('/api/sales/export.csv', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': window.CSRF_TOKEN,
-        },
-        body: JSON.stringify(getBody()),
-    })
-    .then(async r => {
-        if (!r.ok) { alert('خطا در خروجی: ' + r.status); return; }
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'sales-' + new Date().toISOString().slice(0,10) + '.csv';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-    });
+  fetch('/api/sales/export.csv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN },
+    body: JSON.stringify(getBody()),
+  })
+  .then(async r => {
+    if (!r.ok) { alert('خطا: ' + r.status); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sales-' + new Date().toISOString().slice(0,10) + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  });
 }
 </script>
 {% endblock %}
