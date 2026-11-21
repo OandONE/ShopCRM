@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}مرجوعی فاکتورها - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+  <h2 class="h3 mb-0"><i class="bi bi-arrow-return-left"></i> مرجوعی فاکتورها</h2>
+  <a href="/sales" class="btn btn-outline-secondary">بازگشت به فروش‌ها</a>
+</div>
+<div class="alert alert-info small">پذیرفتن یا نپذیرفتن مرجوعی بر عهده فروشنده است. این صفحه فقط ثبت تصمیم و محاسبه مبلغ و موجودی را انجام می‌دهد.</div>
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-striped table-hover align-middle mb-0">
+      <thead class="table-dark"><tr><th>شماره فاکتور</th><th>تاریخ</th><th>اقلام</th><th>تعداد مرجوع‌شده</th><th>مبلغ فاکتور</th><th></th></tr></thead>
+      <tbody>
+      {% for sale in sales %}
+        <tr>
+          <td><strong>#{{ sale.id }}</strong></td>
+          <td>{{ sale.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ sale.items_summary or '—' }}</td>
+          <td>{{ sale.returned_quantity }}</td>
+          <td>{{ '{:,}'.format(sale.total) }} تومان</td>
+          <td><a class="btn btn-sm btn-primary" href="/sales/{{ sale.id }}/returns">ثبت / مشاهده مرجوعی</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-center text-body-secondary py-4">فاکتوری برای نمایش وجود ندارد.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

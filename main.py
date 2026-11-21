@@ -4,17 +4,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Session, create_engine, select, func
-from sqlalchemy import Float, cast, desc
+from sqlalchemy import Float, cast, desc, update as sa_update
 from models import (
     User, UserSession, StoreSettings, AuditLog,
-    Column, Product, ProductPriceHistory,
+    Column, Product, ProductPriceHistory, InventoryMovement,
     Sale, SaleValue, SaleItem, SaleItemValue, DeletedSale,
+    SaleReturn, SaleReturnItem,
 )
 from rate_limit import RateLimiter
 from audit import write_audit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3
+import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3, re
+from html import escape as html_escape
 
 
 engine = create_engine("sqlite:///database.db", connect_args={"check_same_thread": False})
@@ -24,7 +26,44 @@ SESSION_COOKIE = "shopcrm_session"
 SESSION_DAYS = 7
 login_limiter = RateLimiter(max_attempts=5, window_minutes=15, cleanup_minutes=30)
 
-ITEM_FIELDS = {"product_name", "db_unit_price", "manual_unit_price", "discount_per_unit", "quantity"}
+ITEM_FIELDS = {"product_name", "db_unit_price", "manual_unit_price", "discount_per_unit", "discount_total", "quantity"}
+
+
+def _migrate_legacy_schema() -> None:
+    """Additive SQLite migrations for databases created by older ShopCRM versions."""
+    additions = {
+        "user": {
+            "can_view_purchase_cost": "BOOLEAN NOT NULL DEFAULT 0",
+        },
+        "storesettings": {
+            "return_deduction_percent": "INTEGER NOT NULL DEFAULT 15",
+        },
+        "product": {
+            "purchase_price": "INTEGER",
+            "stock_quantity": "INTEGER NOT NULL DEFAULT 0",
+            "is_active": "BOOLEAN NOT NULL DEFAULT 1",
+        },
+        "productpricehistory": {
+            "old_purchase_price": "INTEGER",
+            "new_purchase_price": "INTEGER",
+        },
+        "sale": {
+            "discount_amount": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "saleitem": {
+            "purchase_unit_price": "INTEGER",
+            "inventory_deducted": "BOOLEAN NOT NULL DEFAULT 0",
+            "discount_total": "INTEGER NOT NULL DEFAULT 0",
+            "invoice_discount_share": "INTEGER NOT NULL DEFAULT 0",
+            "final_line_total": "INTEGER",
+        },
+    }
+    with engine.begin() as conn:
+        for table, columns in additions.items():
+            present = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info('{table}')").fetchall()}
+            for column, ddl in columns.items():
+                if column not in present:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def utcnow() -> datetime:
@@ -140,15 +179,111 @@ def _safe_next(next_url: str) -> str:
     return next_url
 
 
+def _discount_breakdown_html(items, total_discount: int, invoice_discount: int) -> str:
+    if not items or not total_discount:
+        return ""
+    rows = []
+    for item in items:
+        qty = int(item.quantity or 0)
+        unit_discount = int(item.discount_per_unit or 0)
+        line_discount = int(getattr(item, "discount_total", 0) or 0)
+        invoice_share = int(getattr(item, "invoice_discount_share", 0) or 0)
+        line_total = getattr(item, "final_line_total", None)
+        if line_total is None:
+            line_total = int(item.final_unit_price or 0) * qty - line_discount - invoice_share
+        rows.append(
+            "<tr><td>{}</td><td>{}</td><td>{:,}</td><td>{:,}</td><td>{:,}</td><td>{:,}</td></tr>".format(
+                html_escape(str(item.product_name)), qty, unit_discount, line_discount,
+                invoice_share, max(0, int(line_total or 0))
+            )
+        )
+    return ("<section class='card shadow-sm mt-3 shopcrm-discount-breakdown'>"
+            "<div class='card-header'>جزئیات تخفیف‌ها</div><div class='card-body'>"
+            "<div class='table-responsive'><table class='table table-sm align-middle'><thead><tr>"
+            "<th>کالا</th><th>تعداد</th><th>تخفیف هر واحد</th><th>تخفیف کل ردیف</th>"
+            "<th>سهم از تخفیف فاکتور</th><th>مبلغ نهایی ردیف</th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table></div>"
+            + "<div class='small text-body-secondary'>تخفیف کل فاکتور: {:,} تومان · مجموع تخفیف‌ها: {:,} تومان</div>".format(
+                int(invoice_discount or 0), int(total_discount or 0)
+            ) + "</div></section>")
+
+
 def render(request: Request, name: str, status_code: int = 200, **ctx):
     user = get_current_user(request)
     sess = get_session(request)
-    return templates.TemplateResponse(name, {
+    response = templates.TemplateResponse(name, {
         "request": request,
         "current_user": user,
         "csrf_token": sess.csrf_token if sess else "",
         **ctx,
     }, status_code=status_code)
+
+    additions = ["<style>@media print {.shopcrm-return-shortcut{display:none !important;}}</style>"]
+    path = request.url.path
+    if user and user.has_permission("view_sales"):
+        if re.fullmatch(r"/sales/\d+", path):
+            sid = path.rsplit("/", 1)[-1]
+            shortcut_url, shortcut_text = f"/sales/{sid}/returns", "مرجوعی همین فاکتور"
+        elif path == "/returns":
+            shortcut_url, shortcut_text = "/sales", "بازگشت به فهرست فروش‌ها"
+        elif path.startswith("/sales/") and path.endswith("/returns"):
+            shortcut_url, shortcut_text = "/returns", "فهرست همه مرجوعی‌ها"
+        else:
+            shortcut_url, shortcut_text = "/returns", "مرجوعی‌ها"
+        additions.append(
+            "<a href='{}' class='btn btn-primary btn-sm shopcrm-return-shortcut' "
+            "style='position:fixed;left:18px;bottom:18px;z-index:1080;border-radius:24px;" 
+            "box-shadow:0 3px 12px rgba(0,0,0,.22);padding:.55rem .9rem'>" 
+            "<i class='bi bi-arrow-return-left'></i> {}</a>".format(shortcut_url, shortcut_text)
+        )
+
+    if path == "/sales":
+        additions.append("""<script>
+        (() => {
+          const clean = () => document.querySelectorAll('table').forEach(table => {
+            if (table.dataset.shopcrmNoItemCol === '1') return;
+            const headers = [...table.querySelectorAll('thead tr:last-child th')];
+            const index = headers.findIndex(th => {
+              const label = (th.innerText || th.textContent || '').trim();
+              return label.startsWith('کالا') || label === 'محصول';
+            });
+            if (index < 0) return;
+            const col = index + 1;
+            const style = document.createElement('style');
+            style.textContent = `table.shopcrm-no-item-col thead th:nth-child(${col}), table.shopcrm-no-item-col tbody td:nth-child(${col}), table.shopcrm-no-item-col tfoot td:nth-child(${col}) { display:none !important; }`;
+            document.head.appendChild(style);
+            table.classList.add('shopcrm-no-item-col');
+            table.dataset.shopcrmNoItemCol = '1';
+          });
+          clean();
+          const observer = new MutationObserver(clean);
+          observer.observe(document.body, {childList:true, subtree:true});
+          setTimeout(() => observer.disconnect(), 12000);
+        })();
+        </script>""")
+
+    if path.startswith("/invoice/"):
+        items = ctx.get("items") or []
+        additions.append(_discount_breakdown_html(
+            items, ctx.get("total_discount", 0), getattr(ctx.get("sale"), "discount_amount", 0)
+        ))
+    elif re.fullmatch(r"/sales/\d+", path):
+        data = ctx.get("data") or {}
+        items = data.get("items") or data.get("values") or []
+        sale = data.get("sale")
+        invoice_discount = data.get("invoice_discount", getattr(sale, "discount_amount", 0) if sale else 0)
+        additions.append(_discount_breakdown_html(items, data.get("total_discount", 0), invoice_discount))
+
+    if additions and response.body:
+        body = response.body.decode("utf-8")
+        snippet = "\n".join(x for x in additions if x)
+        if "</body>" in body:
+            body = body.replace("</body>", snippet + "\n</body>", 1)
+        else:
+            body += snippet
+        response.body = body.encode("utf-8")
+        response.headers["content-length"] = str(len(response.body))
+    return response
 
 
 # Lifespan
@@ -156,6 +291,7 @@ def render(request: Request, name: str, status_code: int = 200, **ctx):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
+    _migrate_legacy_schema()
     with Session(engine) as session:
         for s in session.exec(select(UserSession).where(UserSession.expires_at < utcnow())).all():
             session.delete(s)
@@ -445,13 +581,16 @@ def search_page(request: Request, user: User = Depends(require_permission("searc
 def admin_page(request: Request, user: User = Depends(require_user)):
     has_any = (user.has_permission("manage_columns")
                or user.has_permission("manage_products")
-               or user.has_permission("view_current_columns"))
+               or user.has_permission("view_current_columns")
+               or user.has_permission("view_sales"))
     if not has_any:
         return RedirectResponse("/", status_code=303)
     with Session(engine) as s:
         columns = _get_columns(s) if (user.has_permission("view_current_columns")
                                        or user.has_permission("manage_columns")) else []
         products = s.exec(select(Product).order_by(Product.name)).all() if user.has_permission("manage_products") else []
+        store_settings = s.exec(select(StoreSettings)).first()
+        return_deduction_percent = store_settings.return_deduction_percent if store_settings else 15
         product_creators = {}
         for p in products:
             if p.created_by_id:
@@ -459,7 +598,9 @@ def admin_page(request: Request, user: User = Depends(require_user)):
                 if u:
                     product_creators[p.id] = u.username
     return render(request, "admin.html", columns=columns, products=products,
-                  product_creators=product_creators)
+                  product_creators=product_creators,
+                  return_deduction_percent=return_deduction_percent,
+                  can_view_purchase_cost=user.has_permission("view_purchase_cost"))
 
 
 # Reports
@@ -475,18 +616,30 @@ def reports_data(request: Request, user: User = Depends(require_permission("view
         total_sales = s.exec(select(func.count(Sale.id))).one()
         total_items = s.exec(select(func.count(SaleItem.id))).one() or 0
 
-        discount_sum = s.exec(
-            select(func.sum(SaleItem.discount_per_unit * SaleItem.quantity))
+        unit_discount_sum = s.exec(
+            select(func.coalesce(func.sum(SaleItem.discount_per_unit * SaleItem.quantity), 0))
         ).one() or 0
-
-        revenue = s.exec(
-            select(func.sum(SaleItem.final_unit_price * SaleItem.quantity))
+        line_discount_sum = s.exec(
+            select(func.coalesce(func.sum(SaleItem.discount_total), 0))
         ).one() or 0
+        invoice_discount_sum = s.exec(
+            select(func.coalesce(func.sum(Sale.discount_amount), 0))
+        ).one() or 0
+        discount_sum = int(unit_discount_sum) + int(line_discount_sum) + int(invoice_discount_sum)
+        line_revenue = s.exec(
+            select(func.coalesce(func.sum(SaleItem.final_unit_price * SaleItem.quantity - SaleItem.discount_total), 0))
+        ).one() or 0
+        revenue = max(0, int(line_revenue) - int(invoice_discount_sum))
 
         # top products by qty
+        # Registered products are grouped by theier stable database identity
+        # while ad-hoc invoice lines remain grouped by theier saved text name
+        product_label = func.coalesce(Product.name, SaleItem.product_name)
         rows = s.exec(
-            select(SaleItem.product_name, func.sum(SaleItem.quantity))
-            .group_by(SaleItem.product_name)
+            select(product_label, func.sum(SaleItem.quantity))
+            .select_from(SaleItem)
+            .outerjoin(Product, Product.id == SaleItem.product_id)
+            .group_by(SaleItem.product_id, product_label)
             .order_by(func.sum(SaleItem.quantity).desc())
             .limit(10)
         ).all()
@@ -523,18 +676,27 @@ def _enrich_sale(session, sale: Sale) -> dict:
     creator = session.get(User, sale.created_by_id) if sale.created_by_id else None
 
     total_qty = sum(it.quantity for it in items)
-    total_final = sum(it.final_unit_price * it.quantity for it in items)
-    total_discount = sum(it.discount_per_unit * it.quantity for it in items)
+    item_discount_total = sum((it.discount_per_unit * it.quantity) + int(getattr(it, "discount_total", 0) or 0) for it in items)
+    total_final = sum(
+        int(it.final_line_total) if getattr(it, "final_line_total", None) is not None
+        else (it.final_unit_price * it.quantity - int(getattr(it, "discount_total", 0) or 0) - int(getattr(it, "invoice_discount_share", 0) or 0))
+        for it in items
+    )
+    invoice_discount = int(getattr(sale, "discount_amount", 0) or 0)
+    total_discount = item_discount_total + invoice_discount
 
     return {
         "id": sale.id,
         "created_at": sale.created_at,
+        # Keep both names: templates may use values; APIs use items
+        "items": items,
         "values": items,
         "sale_values": sale_values,
         "creator_username": creator.username if creator else None,
         "total_qty": total_qty,
         "total_final": total_final,
         "total_discount": total_discount,
+        "invoice_discount": invoice_discount,
     }
 
 
@@ -545,6 +707,203 @@ def sales_page(request: Request, user: User = Depends(require_permission("view_s
         sales = s.exec(select(Sale).order_by(desc(Sale.id)).limit(100)).all()
         enriched = [_enrich_sale(s, sale) for sale in sales]
     return render(request, "sales.html", sales=enriched, sale_columns=sale_columns)
+
+
+@app.get("/returns", response_class=HTMLResponse)
+def returns_index(request: Request, user: User = Depends(require_permission("view_sales"))):
+    with Session(engine) as s:
+        sales = s.exec(select(Sale).order_by(desc(Sale.id)).limit(100)).all()
+        rows = []
+        for sale in sales:
+            items = s.exec(select(SaleItem).where(SaleItem.sale_id == sale.id)).all()
+            returned_total = 0
+            for item in items:
+                val = s.exec(select(func.coalesce(func.sum(SaleReturnItem.quantity), 0))
+                             .where(SaleReturnItem.sale_item_id == item.id)).one()
+                returned_total += int(val or 0)
+            rows.append({
+                "id": sale.id,
+                "created_at": sale.created_at,
+                "items_summary": "، ".join(f"{it.quantity}× {it.product_name}" for it in items),
+                "total": max(0, sum(
+                    int(it.final_line_total) if getattr(it, "final_line_total", None) is not None
+                    else it.final_unit_price * it.quantity - int(getattr(it, "discount_total", 0) or 0) - int(getattr(it, "invoice_discount_share", 0) or 0)
+                    for it in items
+                )),
+                "returned_quantity": returned_total,
+            })
+    return render(request, "returns.html", sales=rows)
+
+
+@app.get("/sales/{sale_id}/returns", response_class=HTMLResponse)
+def sale_returns_page(sale_id: int, request: Request,
+                      user: User = Depends(require_permission("view_sales"))):
+    with Session(engine) as s:
+        sale = s.get(Sale, sale_id)
+        if not sale:
+            raise HTTPException(404, "فاکتور پیدا نشد")
+        settings = s.exec(select(StoreSettings)).first()
+        deduction_percent = max(0, min(100, int(settings.return_deduction_percent or 0))) if settings else 15
+        items = s.exec(select(SaleItem).where(SaleItem.sale_id == sale_id).order_by(SaleItem.id)).all()
+        item_rows = []
+        item_by_id = {it.id: it for it in items}
+        for item in items:
+            returned = s.exec(select(func.coalesce(func.sum(SaleReturnItem.quantity), 0))
+                              .where(SaleReturnItem.sale_item_id == item.id)).one()
+            returned_qty = int(returned or 0)
+            product = s.get(Product, item.product_id) if item.product_id else None
+            payable_total = (int(item.final_line_total) if getattr(item, "final_line_total", None) is not None
+                             else item.final_unit_price * item.quantity - int(getattr(item, "discount_total", 0) or 0)
+                                  - int(getattr(item, "invoice_discount_share", 0) or 0))
+            item_rows.append({
+                "item": item,
+                "returned_qty": returned_qty,
+                "remaining_qty": max(0, item.quantity - returned_qty),
+                "payable_total": max(0, payable_total),
+                "can_restock": bool(product),
+            })
+
+        return_rows = []
+        previous_returns = s.exec(select(SaleReturn).where(SaleReturn.sale_id == sale_id)
+                                  .order_by(desc(SaleReturn.created_at))).all()
+        for ret in previous_returns:
+            actor = s.get(User, ret.created_by_id) if ret.created_by_id else None
+            details = []
+            ret_items = s.exec(select(SaleReturnItem).where(SaleReturnItem.return_id == ret.id)).all()
+            for ritem in ret_items:
+                sale_item = item_by_id.get(ritem.sale_item_id) or s.get(SaleItem, ritem.sale_item_id)
+                details.append({
+                    "name": sale_item.product_name if sale_item else "قلم حذف‌شده",
+                    "quantity": ritem.quantity,
+                    "restock_quantity": ritem.restock_quantity,
+                    "refund_amount": ritem.refund_amount,
+                    "deduction_percent": ritem.deduction_percent,
+                })
+            return_rows.append({
+                "id": ret.id,
+                "created_at": ret.created_at,
+                "total_refund": ret.total_refund,
+                "note": ret.note,
+                "actor": actor.username if actor else "—",
+                "items": details,
+            })
+    return render(request, "sale_returns.html", sale=sale, item_rows=item_rows,
+                  return_rows=return_rows, deduction_percent=deduction_percent)
+
+
+@app.post("/api/sales/{sale_id}/returns")
+async def create_sale_return(sale_id: int, request: Request,
+                             user: User = Depends(require_permission("view_sales"))):
+    verify_csrf_header(request)
+    body = await request.json()
+    if not body.get("accepted_by_seller"):
+        raise HTTPException(400, "ثبت مرجوعی باید توسط فروشنده تأیید شود")
+    raw_items = body.get("items") or []
+    if not raw_items:
+        raise HTTPException(400, "حداقل یک قلم برای مرجوعی انتخاب کنید")
+
+    with Session(engine) as s:
+        sale = s.get(Sale, sale_id)
+        if not sale:
+            raise HTTPException(404, "فاکتور پیدا نشد")
+        settings = s.exec(select(StoreSettings)).first()
+        deduction_percent = max(0, min(100, int(settings.return_deduction_percent or 0))) if settings else 15
+
+        prepared = []
+        seen_item_ids = set()
+        for raw in raw_items:
+            try:
+                sale_item_id = int(raw.get("sale_item_id"))
+                qty = int(raw.get("quantity", 0))
+                restock_qty = int(raw.get("restock_quantity", 0))
+                refund_amount = int(raw.get("refund_amount", 0))
+            except (ValueError, TypeError):
+                raise HTTPException(400, "اطلاعات یکی از اقلام مرجوعی نامعتبر است")
+            if sale_item_id in seen_item_ids:
+                raise HTTPException(400, "یک قلم در درخواست مرجوعی تکرار شده است")
+            seen_item_ids.add(sale_item_id)
+            if qty < 1 or restock_qty < 0 or restock_qty > qty or refund_amount < 0:
+                raise HTTPException(400, "تعداد یا مبلغ مرجوعی نامعتبر است")
+
+            item = s.get(SaleItem, sale_item_id)
+            if not item or item.sale_id != sale_id:
+                raise HTTPException(400, "قلم انتخاب‌شده متعلق به این فاکتور نیست")
+            already_returned = s.exec(select(func.coalesce(func.sum(SaleReturnItem.quantity), 0))
+                                      .where(SaleReturnItem.sale_item_id == sale_item_id)).one()
+            remaining_qty = item.quantity - int(already_returned or 0)
+            if qty > remaining_qty:
+                raise HTTPException(400, f"از «{item.product_name}» فقط {max(0, remaining_qty)} عدد باقی مانده که مرجوع نشده است")
+
+            product = s.get(Product, item.product_id) if item.product_id else None
+            if restock_qty and not product:
+                raise HTTPException(400, f"برای «{item.product_name}» محصول انباری متناظر وجود ندارد")
+
+            line_payable = (int(item.final_line_total) if getattr(item, "final_line_total", None) is not None
+                            else int(item.final_unit_price or 0) * item.quantity
+                                 - int(getattr(item, "discount_total", 0) or 0)
+                                 - int(getattr(item, "invoice_discount_share", 0) or 0))
+            already_qty = int(already_returned or 0)
+            before_amount = (max(0, line_payable) * already_qty) // max(1, item.quantity)
+            after_amount = (max(0, line_payable) * (already_qty + qty)) // max(1, item.quantity)
+            returned_basis_amount = max(0, after_amount - before_amount)
+            suggested_refund = (returned_basis_amount * (100 - deduction_percent) + 50) // 100
+            prepared.append({
+                "item": item,
+                "product": product,
+                "quantity": qty,
+                "restock_quantity": restock_qty,
+                "suggested_refund_amount": suggested_refund,
+                "refund_amount": refund_amount,
+            })
+
+        note = str(body.get("note", "")).strip()[:1000] or None
+        return_record = SaleReturn(
+            sale_id=sale_id,
+            total_refund=sum(row["refund_amount"] for row in prepared),
+            note=note,
+            accepted_by_seller=True,
+            created_by_id=user.id,
+        )
+        s.add(return_record)
+        s.flush()
+
+        for row in prepared:
+            item = row["item"]
+            s.add(SaleReturnItem(
+                return_id=return_record.id,
+                sale_item_id=item.id,
+                quantity=row["quantity"],
+                restock_quantity=row["restock_quantity"],
+                deduction_percent=deduction_percent,
+                suggested_refund_amount=row["suggested_refund_amount"],
+                refund_amount=row["refund_amount"],
+            ))
+            if row["restock_quantity"]:
+                product = row["product"]
+                s.exec(
+                    sa_update(Product).where(Product.id == product.id).values(
+                        stock_quantity=Product.stock_quantity + row["restock_quantity"],
+                        updated_at=utcnow(), updated_by_id=user.id,
+                    ).execution_options(synchronize_session=False)
+                )
+                s.refresh(product)
+                s.add(InventoryMovement(
+                    product_id=product.id,
+                    quantity_change=row["restock_quantity"],
+                    reason="sale_return", reference_type="sale_return",
+                    reference_id=return_record.id,
+                    note=f"برگشت {row['restock_quantity']} عدد از فاکتور {sale_id}",
+                    created_by_id=user.id,
+                ))
+        s.commit()
+        return_id = return_record.id
+        total_refund = return_record.total_refund
+
+    write_audit(engine, request, "sale.return", user=user, target_type="sale", target_id=sale_id,
+                metadata_json=json.dumps({"return_id": return_id, "total_refund": total_refund,
+                                          "items_count": len(prepared)}, ensure_ascii=False))
+    return {"ok": True, "return_id": return_id, "total_refund": total_refund,
+            "redirect": f"/sales/{sale_id}/returns"}
 
 
 @app.get("/sales/{sale_id}", response_class=HTMLResponse)
@@ -573,10 +932,14 @@ def invoice_page(sale_id: int, request: Request,
         sale_values = s.exec(select(SaleValue).where(SaleValue.sale_id == sale_id)).all()
         sale_cols = {c.id: c.name for c in _get_columns(s, scope="sale")}
 
-        total_qty      = sum(it.quantity for it in items)
-        total_final    = sum(it.final_unit_price * it.quantity for it in items)
-        total_discount = sum(it.discount_per_unit * it.quantity for it in items)
-        total_words    = number_to_persian(total_final) + " تومان" if total_final else ""
+        total_qty = sum(it.quantity for it in items)
+        total_final = sum(
+            int(it.final_line_total) if getattr(it, "final_line_total", None) is not None
+            else it.final_unit_price * it.quantity - int(getattr(it, "discount_total", 0) or 0) - int(getattr(it, "invoice_discount_share", 0) or 0)
+            for it in items
+        )
+        total_discount = sum(it.discount_per_unit * it.quantity + int(getattr(it, "discount_total", 0) or 0) for it in items) + int(getattr(sale, "discount_amount", 0) or 0)
+        total_words = number_to_persian(total_final) + " تومان" if total_final else ""
 
         extras = [
             {"name": sale_cols.get(v.column_id, "?"), "value": v.value}
@@ -624,7 +987,8 @@ async def sales_export(request: Request, user: User = Depends(require_permission
         buf.write("\ufeff")
         writer = csv.writer(buf)
         header = ["شماره فاکتور", "تاریخ", "کالا", "تعداد",
-                  "قیمت دیتابیس", "قیمت فروش", "تخفیف هر واحد", "مبلغ نهایی"]
+                  "قیمت دیتابیس", "قیمت فروش", "تخفیف هر واحد", "تخفیف کل ردیف",
+                  "تخفیف کل فاکتور (فقط ردیف اول)", "مبلغ نهایی ردیف"]
         header += [c.name for c in sale_columns]
         writer.writerow(header)
 
@@ -645,7 +1009,9 @@ async def sales_export(request: Request, user: User = Depends(require_permission
                     it.db_unit_price if it.db_unit_price is not None else "",
                     it.manual_unit_price,
                     it.discount_per_unit,
-                    it.final_unit_price,
+                    int(getattr(it, "discount_total", 0) or 0),
+                    int(getattr(sale, "discount_amount", 0) or 0) if it == items[0] else 0,
+                    int(it.final_line_total) if getattr(it, "final_line_total", None) is not None else it.final_unit_price * it.quantity - int(getattr(it, "discount_total", 0) or 0) - int(getattr(it, "invoice_discount_share", 0) or 0),
                 ]
                 for c in sale_columns:
                     row.append(vals.get(c.id, ""))
@@ -770,12 +1136,12 @@ def price_to_words(price: str = "", user: User = Depends(require_user)):
 @app.get("/api/search-products")
 def search_products(q: str = "", user: User = Depends(require_user)):
     with Session(engine) as s:
+        stmt = select(Product).where(Product.is_active == True)  # type: ignore
         if q:
-            stmt = select(Product).where(Product.name.like(f"%{_escape_like(q)}%", escape="\\"))
-            products = s.exec(stmt).all()
-        else:
-            products = s.exec(select(Product).order_by(Product.name)).all()
-        return [{"id": p.id, "name": p.name, "price": p.price} for p in products]
+            stmt = stmt.where(Product.name.like(f"%{_escape_like(q)}%", escape="\\"))
+        products = s.exec(stmt.order_by(Product.name).limit(30)).all()
+        return [{"id": p.id, "name": p.name, "price": p.price,
+                 "stock_quantity": p.stock_quantity} for p in products]
 
 
 # API: columns (by virtual item fields)
@@ -794,6 +1160,7 @@ def list_columns(user: User = Depends(require_user)):
         {"id": "item:db_unit_price",     "name": "قیمت دیتابیس",  "type": "number", "options": None, "scope": "item"},
         {"id": "item:manual_unit_price", "name": "قیمت فروش",     "type": "number", "options": None, "scope": "item"},
         {"id": "item:discount_per_unit", "name": "تخفیف هر واحد", "type": "number", "options": None, "scope": "item"},
+        {"id": "item:discount_total", "name": "تخفیف کل ردیف", "type": "number", "options": None, "scope": "item"},
         {"id": "item:quantity",          "name": "تعداد",         "type": "number", "options": None, "scope": "item"},
     ]
     return result
@@ -818,9 +1185,14 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
         raise HTTPException(400, "سبد خرید خالی است")
 
     sale_values_in = body.get("sale_values") or {}
+    try:
+        invoice_discount_amount = int(body.get("invoice_discount_amount", 0) or 0)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "تخفیف کل فاکتور نامعتبر است")
+    if invoice_discount_amount < 0:
+        raise HTTPException(400, "تخفیف کل فاکتور نمی‌تواند منفی باشد")
     edited = bool(body.get("datetime_edited", False))
     created_at_str = body.get("created_at")
-
     if edited and created_at_str:
         try:
             created_at = datetime.fromisoformat(created_at_str.replace("Z", ""))
@@ -832,16 +1204,18 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
         created_at = utcnow()
 
     validated = []
+    stock_warnings = []
     with Session(engine) as s:
         all_columns = _get_columns(s)
         sale_cols = {c.id: c for c in all_columns if c.scope == "sale"}
         item_cols = {c.id: c for c in all_columns if c.scope == "item"}
 
-        # validate required sale-scope
         for c in sale_cols.values():
             if c.required and not str(sale_values_in.get(str(c.id), "")).strip():
                 raise HTTPException(400, f"فیلد «{c.name}» الزامی است")
 
+        products_by_id = {}
+        quantities_by_product = {}
         for raw in raw_items:
             try:
                 pid = raw.get("product_id")
@@ -849,92 +1223,144 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
                 qty = int(raw.get("quantity", 1))
                 manual = int(raw.get("manual_unit_price", 0))
                 discount = int(raw.get("discount_per_unit", 0))
+                line_discount = int(raw.get("discount_total", 0) or 0)
             except (ValueError, TypeError):
                 raise HTTPException(400, "اطلاعات یکی از اقلام نامعتبر است")
 
             if qty < 1:
                 raise HTTPException(400, "تعداد باید حداقل ۱ باشد")
-            if manual < 0:
-                raise HTTPException(400, "قیمت نمی‌تواند منفی باشد")
-            if discount < 0:
-                raise HTTPException(400, "تخفیف نمی‌تواند منفی باشد")
+            if manual < 0 or discount < 0 or line_discount < 0:
+                raise HTTPException(400, "قیمت و تخفیف نمی‌توانند منفی باشند")
             if discount > manual:
-                raise HTTPException(400, "تخفیف بیشتر از قیمت است")
+                raise HTTPException(400, "تخفیف هر واحد بیشتر از قیمت است")
+            line_base_before_global = (manual - discount) * qty
+            if line_discount > line_base_before_global:
+                raise HTTPException(400, "تخفیف کل ردیف بیشتر از مبلغ همان ردیف است")
 
             product = None
             db_price = None
+            purchase_price = None
             pname = ""
             if pid:
-                product = s.get(Product, pid)
-                if not product:
-                    raise HTTPException(400, f"محصول #{pid} یافت نشد")
+                product = products_by_id.get(pid) or s.get(Product, pid)
+                if not product or not product.is_active:
+                    raise HTTPException(400, f"محصول #{pid} یافت نشد یا غیرفعال است")
+                products_by_id[pid] = product
                 db_price = product.price
+                purchase_price = product.purchase_price
                 pname = product.name
+                quantities_by_product[pid] = quantities_by_product.get(pid, 0) + qty
             else:
+                # Ad-hoc items are intentionally allowed and do not affect inventory
                 pname = str(raw.get("product_name", "")).strip()
                 if not pname:
                     raise HTTPException(400, "نام کالا نمی‌تواند خالی باشد")
 
             final = manual - discount
-
-            # custom item-scope values
             custom = {}
-            for cid_str, v in (raw.get("custom_values") or {}).items():
+            for cid_str, value in (raw.get("custom_values") or {}).items():
                 try:
                     cid = int(cid_str)
                 except (ValueError, TypeError):
                     continue
-                if cid in item_cols and str(v).strip():
-                    custom[cid] = str(v).strip()
-
-            # validate required item-scope
-            for cid, c in item_cols.items():
-                if c.required and not custom.get(cid):
-                    raise HTTPException(400, f"فیلد «{c.name}» برای «{pname}» الزامی است")
+                if cid in item_cols and str(value).strip():
+                    custom[cid] = str(value).strip()
+            for cid, col in item_cols.items():
+                if col.required and not custom.get(cid):
+                    raise HTTPException(400, f"فیلد «{col.name}» برای «{pname}» الزامی است")
 
             validated.append({
                 "product_id": pid,
                 "product_name": pname,
                 "quantity": qty,
                 "db_unit_price": db_price,
+                "purchase_unit_price": purchase_price,
+                "inventory_deducted": bool(product),
                 "manual_unit_price": manual,
                 "discount_per_unit": discount,
+                "discount_total": line_discount,
                 "final_unit_price": final,
                 "custom_values": custom,
             })
 
-        sale = Sale(created_at=created_at, created_by_id=user.id)
+
+        line_amounts = [max(0, v["final_unit_price"] * v["quantity"] - v["discount_total"]) for v in validated]
+        subtotal_after_item_discounts = sum(line_amounts)
+        if invoice_discount_amount > subtotal_after_item_discounts:
+            raise HTTPException(400, "تخفیف کل فاکتور بیشتر از مبلغ سبد خرید است")
+        allocations = [0] * len(validated)
+        if invoice_discount_amount and subtotal_after_item_discounts:
+            remainders = []
+            for index, line_amount in enumerate(line_amounts):
+                numerator = invoice_discount_amount * line_amount
+                allocations[index] = numerator // subtotal_after_item_discounts
+                remainders.append((numerator % subtotal_after_item_discounts, index))
+            leftover = invoice_discount_amount - sum(allocations)
+            for _, index in sorted(remainders, reverse=True)[:leftover]:
+                allocations[index] += 1
+        for index, values in enumerate(validated):
+            values["invoice_discount_share"] = allocations[index]
+            values["final_line_total"] = max(0, line_amounts[index] - allocations[index])
+
+        # The invoice and stock updates are committed as one transaction
+        sale = Sale(created_at=created_at, created_by_id=user.id,
+                    discount_amount=invoice_discount_amount)
         s.add(sale)
-        s.commit()
-        s.refresh(sale)
+        s.flush()
+        sale_id = sale.id
 
-        for v in validated:
-            custom = v.pop("custom_values", {})
-            item = SaleItem(sale_id=sale.id, **v)
+        for values in validated:
+            custom = values.pop("custom_values", {})
+            item = SaleItem(sale_id=sale_id, **values)
             s.add(item)
-            s.commit()
-            s.refresh(item)
-            for cid, val in custom.items():
-                s.add(SaleItemValue(item_id=item.id, column_id=cid, value=val))
+            s.flush()
+            for cid, value in custom.items():
+                s.add(SaleItemValue(item_id=item.id, column_id=cid, value=value))
 
-        for cid_str, val in sale_values_in.items():
+        for pid, sold_qty in quantities_by_product.items():
+            product = products_by_id[pid]
+            # Use an atomic SQL arithmetic update so simultaneous sales cannot overwrite
+            # each other's stock deductions
+            s.exec(
+                sa_update(Product).where(Product.id == pid).values(
+                    stock_quantity=Product.stock_quantity - sold_qty,
+                    updated_at=utcnow(), updated_by_id=user.id,
+                ).execution_options(synchronize_session=False)
+            )
+            s.refresh(product)
+            new_stock = int(product.stock_quantity or 0)
+            previous_stock = new_stock + sold_qty
+            s.add(InventoryMovement(
+                product_id=pid, quantity_change=-sold_qty,
+                reason="sale", reference_type="sale", reference_id=sale_id,
+                note=f"فروش فاکتور شماره {sale_id}", created_by_id=user.id,
+            ))
+            if new_stock < 0:
+                stock_warnings.append({
+                    "product_name": product.name,
+                    "previous_stock": previous_stock,
+                    "sold_quantity": sold_qty,
+                    "new_stock": new_stock,
+                })
+
+        for cid_str, value in sale_values_in.items():
             try:
                 cid = int(cid_str)
             except (ValueError, TypeError):
                 continue
-            v = str(val).strip()
-            if v:
-                s.add(SaleValue(sale_id=sale.id, column_id=cid, value=v))
-
+            text_value = str(value).strip()
+            if cid in sale_cols and text_value:
+                s.add(SaleValue(sale_id=sale_id, column_id=cid, value=text_value))
         s.commit()
-        sale_id = sale.id
 
-    total_discount = sum(v["discount_per_unit"] * v["quantity"] for v in validated)
+    total_discount = (sum(v["discount_per_unit"] * v["quantity"] + v["discount_total"] for v in validated)
+                      + invoice_discount_amount)
     write_audit(engine, request, "sale.create_invoice", user=user,
                 target_type="sale", target_id=sale_id,
                 metadata_json=json.dumps({
                     "items_count": len(validated),
                     "total_discount": total_discount,
+                    "stock_warnings": stock_warnings,
                 }, ensure_ascii=False))
     if edited:
         write_audit(engine, request, "sale.datetime_edited", user=user,
@@ -949,6 +1375,7 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
         "sale_id": sale_id,
         "redirect": f"/{source}",
         "invoice_url": f"/invoice/{sale_id}",
+        "stock_warnings": stock_warnings,
     }
 
 
@@ -967,6 +1394,9 @@ async def delete_sale(request: Request, user: User = Depends(require_permission(
         sale = s.get(Sale, sid)
         if not sale:
             raise HTTPException(404, "فروش پیدا نشد")
+        if s.exec(select(SaleReturn).where(SaleReturn.sale_id == sid)).first():
+            raise HTTPException(400, "برای فاکتوری که مرجوعی ثبت‌شده دارد، حذف انجام نمی‌شود")
+
         items = s.exec(select(SaleItem).where(SaleItem.sale_id == sid)).all()
         item_ids = [it.id for it in items]
         item_values = []
@@ -982,15 +1412,22 @@ async def delete_sale(request: Request, user: User = Depends(require_permission(
                 "created_at": sale.created_at.isoformat(),
                 "created_by_id": sale.created_by_id,
                 "note": sale.note,
+                "discount_amount": int(getattr(sale, "discount_amount", 0) or 0),
             },
             "items": [
                 {
+                    "old_item_id": it.id,
                     "product_id": it.product_id,
                     "product_name": it.product_name,
                     "quantity": it.quantity,
                     "db_unit_price": it.db_unit_price,
+                    "purchase_unit_price": it.purchase_unit_price,
+                    "inventory_deducted": bool(it.inventory_deducted),
                     "manual_unit_price": it.manual_unit_price,
                     "discount_per_unit": it.discount_per_unit,
+                    "discount_total": int(getattr(it, "discount_total", 0) or 0),
+                    "invoice_discount_share": int(getattr(it, "invoice_discount_share", 0) or 0),
+                    "final_line_total": getattr(it, "final_line_total", None),
                     "final_unit_price": it.final_unit_price,
                 } for it in items
             ],
@@ -1005,12 +1442,31 @@ async def delete_sale(request: Request, user: User = Depends(require_permission(
             data_json=json.dumps(backup, ensure_ascii=False),
             deleted_by_id=user.id,
         ))
+
+        # Put back stock only for sales made after inventory tracking was enabled
+        for it in items:
+            if it.inventory_deducted and it.product_id:
+                product = s.get(Product, it.product_id)
+                if product:
+                    s.exec(
+                        sa_update(Product).where(Product.id == product.id).values(
+                            stock_quantity=Product.stock_quantity + it.quantity,
+                            updated_at=utcnow(), updated_by_id=user.id,
+                        ).execution_options(synchronize_session=False)
+                    )
+                    s.refresh(product)
+                    s.add(InventoryMovement(
+                        product_id=product.id, quantity_change=it.quantity,
+                        reason="sale_deleted", reference_type="deleted_sale", reference_id=sid,
+                        note=f"بازگشت موجودی بابت حذف فاکتور {sid}", created_by_id=user.id,
+                    ))
+
         for iv in item_values:
             s.delete(iv)
         for it in items:
             s.delete(it)
-        for v in vals:
-            s.delete(v)
+        for value in vals:
+            s.delete(value)
         s.delete(sale)
         s.commit()
 
@@ -1172,29 +1628,57 @@ async def delete_column(request: Request, user: User = Depends(require_permissio
     return RedirectResponse("/admin", status_code=303)
 
 
+def _parse_optional_amount(raw, field_label: str) -> int | None:
+    text_value = str(raw or "").strip().replace(",", "").replace("٬", "")
+    if not text_value:
+        return None
+    value = _to_int(text_value)
+    if value is None or value < 0:
+        raise HTTPException(400, f"{field_label} نامعتبر است")
+    return value
+
+
+def _parse_stock_value(raw, field_label: str = "موجودی") -> int:
+    value = _to_int(str(raw or "0").strip().replace(",", "").replace("٬", ""))
+    if value is None:
+        raise HTTPException(400, f"{field_label} نامعتبر است")
+    return value
+
+
 @app.post("/api/product/add")
 async def add_product(request: Request, user: User = Depends(require_permission("manage_products"))):
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
     name = str(form.get("name", "")).strip()
-    price_str = str(form.get("price", "")).strip().replace(",", "")
-    price = int(price_str) if price_str.isdigit() else None
-
+    price = _parse_optional_amount(form.get("price"), "قیمت فروش")
+    purchase_price = (_parse_optional_amount(form.get("purchase_price"), "قیمت خرید")
+                      if user.has_permission("view_purchase_cost") else None)
+    initial_stock = _parse_stock_value(form.get("stock_quantity", "0"), "موجودی اولیه")
+    if initial_stock < 0:
+        raise HTTPException(400, "موجودی اولیه نمی‌تواند منفی باشد")
     if not name:
         raise HTTPException(400, "نام محصول الزامی است")
 
     with Session(engine) as s:
         if s.exec(select(Product).where(Product.name == name)).first():
             raise HTTPException(400, f"محصول «{name}» قبلاً وجود دارد")
-        p = Product(name=name, price=price,
+        p = Product(name=name, price=price, purchase_price=purchase_price,
+                    stock_quantity=initial_stock, is_active=True,
                     created_by_id=user.id, updated_by_id=user.id)
         s.add(p)
-        s.commit()
-        s.refresh(p)
+        s.flush()
         pid = p.id
+        if initial_stock:
+            s.add(InventoryMovement(
+                product_id=pid, quantity_change=initial_stock,
+                reason="initial_stock", note="موجودی اولیه هنگام ساخت محصول",
+                created_by_id=user.id,
+            ))
+        s.commit()
 
     write_audit(engine, request, "product.create", user=user, target_type="product", target_id=pid,
-                metadata_json=json.dumps({"name": name, "price": price}, ensure_ascii=False))
+                metadata_json=json.dumps({"name": name, "price": price,
+                                          "initial_stock": initial_stock}, ensure_ascii=False))
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -1203,9 +1687,10 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
     form = await request.form()
     verify_csrf(request, str(form.get("csrf_token", "")))
     new_name = str(form.get("name", "")).strip()
-    price_str = str(form.get("price", "")).strip().replace(",", "")
-    new_price = int(price_str) if price_str.isdigit() else None
-
+    new_price = _parse_optional_amount(form.get("price"), "قیمت فروش")
+    new_purchase_price = (_parse_optional_amount(form.get("purchase_price"), "قیمت خرید")
+                         if user.has_permission("view_purchase_cost") else None)
+    new_stock = _parse_stock_value(form.get("stock_quantity", "0"))
     if not new_name:
         raise HTTPException(400, "نام محصول الزامی است")
 
@@ -1218,24 +1703,42 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
             raise HTTPException(400, f"محصول دیگری با نام «{new_name}» وجود دارد")
 
         old_price = p.price
-        price_changed = (old_price != new_price)
+        old_purchase_price = p.purchase_price
+        old_stock = p.stock_quantity
+        price_changed = old_price != new_price
+        purchase_changed = (user.has_permission("view_purchase_cost")
+                            and old_purchase_price != new_purchase_price)
+        stock_delta = new_stock - old_stock
 
         p.name = new_name
         p.price = new_price
+        if user.has_permission("view_purchase_cost"):
+            p.purchase_price = new_purchase_price
+        p.stock_quantity = new_stock
         p.updated_at = utcnow()
         p.updated_by_id = user.id
         s.add(p)
 
-        if price_changed:
+        if price_changed or purchase_changed:
             s.add(ProductPriceHistory(
                 product_id=pid,
                 old_price=old_price,
                 new_price=new_price,
+                old_purchase_price=old_purchase_price,
+                new_purchase_price=p.purchase_price,
                 changed_by_id=user.id,
+            ))
+        if stock_delta:
+            s.add(InventoryMovement(
+                product_id=pid, quantity_change=stock_delta,
+                reason="manual_adjustment", note="اصلاح دستی موجودی از صفحه مدیریت محصولات",
+                created_by_id=user.id,
             ))
         s.commit()
 
-    write_audit(engine, request, "product.update", user=user, target_type="product", target_id=pid)
+    write_audit(engine, request, "product.update", user=user, target_type="product", target_id=pid,
+                metadata_json=json.dumps({"stock_delta": stock_delta,
+                                          "purchase_price_changed": purchase_changed}, ensure_ascii=False))
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -1249,15 +1752,38 @@ async def delete_product(request: Request, user: User = Depends(require_permissi
         raise HTTPException(400, "شناسه محصول نامعتبر است")
     with Session(engine) as s:
         p = s.get(Product, pid)
-        if p:
-            s.delete(p)
-            s.commit()
-    write_audit(engine, request, "product.delete", user=user, target_type="product", target_id=pid)
+        if not p:
+            raise HTTPException(404, "محصول پیدا نشد")
+        # Historical invoice references must remain valid: archive instead of hard-delete
+        p.is_active = False
+        p.updated_at = utcnow()
+        p.updated_by_id = user.id
+        s.add(p)
+        s.commit()
+    write_audit(engine, request, "product.archive", user=user, target_type="product", target_id=pid)
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/api/product/{pid}/activate")
+async def activate_product(pid: int, request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        product = s.get(Product, pid)
+        if not product:
+            raise HTTPException(404, "محصول پیدا نشد")
+        product.is_active = True
+        product.updated_at = utcnow()
+        product.updated_by_id = user.id
+        s.add(product)
+        s.commit()
+    write_audit(engine, request, "product.activate", user=user, target_type="product", target_id=pid)
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.get("/api/product/{pid}/history")
-def product_history(pid: int, request: Request, user: User = Depends(require_user)):
+def product_history(pid: int, user: User = Depends(require_user)):
+    can_view_cost = user.has_permission("view_purchase_cost")
     with Session(engine) as s:
         p = s.get(Product, pid)
         if not p:
@@ -1270,13 +1796,60 @@ def product_history(pid: int, request: Request, user: User = Depends(require_use
         result = []
         for r in rows:
             changer = s.get(User, r.changed_by_id) if r.changed_by_id else None
-            result.append({
+            item = {
                 "old_price": r.old_price,
                 "new_price": r.new_price,
                 "changed_by": changer.username if changer else "?",
                 "changed_at": r.changed_at.isoformat(),
+            }
+            if can_view_cost:
+                item["old_purchase_price"] = r.old_purchase_price
+                item["new_purchase_price"] = r.new_purchase_price
+            result.append(item)
+        return result
+
+
+@app.get("/api/product/{pid}/stock-history")
+def product_stock_history(pid: int, user: User = Depends(require_permission("manage_products"))):
+    with Session(engine) as s:
+        p = s.get(Product, pid)
+        if not p:
+            raise HTTPException(404, "محصول پیدا نشد")
+        rows = s.exec(select(InventoryMovement)
+                      .where(InventoryMovement.product_id == pid)
+                      .order_by(desc(InventoryMovement.created_at))
+                      .limit(100)).all()
+        result = []
+        for row in rows:
+            actor = s.get(User, row.created_by_id) if row.created_by_id else None
+            result.append({
+                "quantity_change": row.quantity_change,
+                "reason": row.reason,
+                "note": row.note,
+                "created_by": actor.username if actor else "سیستم",
+                "created_at": row.created_at.isoformat(),
             })
         return result
+
+
+@app.post("/api/owner/return-settings/update")
+async def owner_return_settings_update(request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    raw_percent = _to_int(form.get("return_deduction_percent"))
+    if raw_percent is None or raw_percent < 0 or raw_percent > 100:
+        raise HTTPException(400, "درصد کسر باید عددی بین ۰ تا ۱۰۰ باشد")
+    with Session(engine) as s:
+        settings = s.exec(select(StoreSettings)).first()
+        if not settings:
+            settings = StoreSettings(name="ShopCRM")
+        settings.return_deduction_percent = raw_percent
+        settings.updated_at = utcnow()
+        s.add(settings)
+        s.commit()
+    write_audit(engine, request, "settings.return_deduction.update", user=user,
+                metadata_json=json.dumps({"return_deduction_percent": raw_percent}))
+    return RedirectResponse("/admin", status_code=303)
 
 
 # Owner routes
@@ -1335,6 +1908,7 @@ async def owner_user_add(request: Request, user: User = Depends(require_owner)):
             can_manage_columns=form.get("can_manage_columns") == "on",
             can_manage_products=form.get("can_manage_products") == "on",
             can_view_current_columns=form.get("can_view_current_columns") == "on",
+            can_view_purchase_cost=form.get("can_view_purchase_cost") == "on",
         )
         s.add(new_user)
         s.commit()
@@ -1380,6 +1954,7 @@ async def owner_user_update(user_id: int, request: Request, user: User = Depends
         u.can_manage_columns = form.get("can_manage_columns") == "on"
         u.can_manage_products = form.get("can_manage_products") == "on"
         u.can_view_current_columns = form.get("can_view_current_columns") == "on"
+        u.can_view_purchase_cost = form.get("can_view_purchase_cost") == "on"
         s.add(u)
         s.commit()
     write_audit(engine, request, "user.update", user=user, target_type="user", target_id=user_id)
@@ -1537,12 +2112,11 @@ async def owner_restore_sale(did: int, request: Request, user: User = Depends(re
         target_id = d.original_sale_id
         if s.get(Sale, target_id):
             target_id = None
-
         created_at = utcnow()
         if sale_info.get("created_at"):
             try:
                 created_at = datetime.fromisoformat(sale_info["created_at"])
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         sale = Sale(
@@ -1550,28 +2124,63 @@ async def owner_restore_sale(did: int, request: Request, user: User = Depends(re
             created_at=created_at,
             created_by_id=sale_info.get("created_by_id"),
             note=sale_info.get("note"),
+            discount_amount=int(sale_info.get("discount_amount", 0) or 0),
         )
         s.add(sale)
-        s.commit()
-        s.refresh(sale)
+        s.flush()
 
+        restored_item_ids = {}
         for it in data.get("items", []):
-            s.add(SaleItem(
+            item = SaleItem(
                 sale_id=sale.id,
                 product_id=it.get("product_id"),
                 product_name=it.get("product_name", "?"),
                 quantity=int(it.get("quantity", 1)),
                 db_unit_price=it.get("db_unit_price"),
+                purchase_unit_price=it.get("purchase_unit_price"),
+                inventory_deducted=bool(it.get("inventory_deducted", False)),
                 manual_unit_price=int(it.get("manual_unit_price", 0)),
                 discount_per_unit=int(it.get("discount_per_unit", 0)),
+                discount_total=int(it.get("discount_total", 0) or 0),
+                invoice_discount_share=int(it.get("invoice_discount_share", 0) or 0),
+                final_line_total=(int(it["final_line_total"]) if it.get("final_line_total") is not None else None),
                 final_unit_price=int(it.get("final_unit_price", 0)),
-            ))
+            )
+            s.add(item)
+            s.flush()
+            if it.get("old_item_id") is not None:
+                restored_item_ids[int(it["old_item_id"])] = item.id
 
-        for v in data.get("values", []):
+            if item.inventory_deducted and item.product_id:
+                product = s.get(Product, item.product_id)
+                if product:
+                    s.exec(
+                        sa_update(Product).where(Product.id == product.id).values(
+                            stock_quantity=Product.stock_quantity - item.quantity,
+                            updated_at=utcnow(), updated_by_id=user.id,
+                        ).execution_options(synchronize_session=False)
+                    )
+                    s.refresh(product)
+                    s.add(InventoryMovement(
+                        product_id=product.id, quantity_change=-item.quantity,
+                        reason="sale_restored", reference_type="sale", reference_id=sale.id,
+                        note=f"کسر مجدد موجودی بابت بازیابی فاکتور {sale.id}", created_by_id=user.id,
+                    ))
+
+        for iv in data.get("item_values", []):
+            restored_item_id = restored_item_ids.get(int(iv.get("item_id", -1)))
+            if restored_item_id:
+                s.add(SaleItemValue(
+                    item_id=restored_item_id,
+                    column_id=iv["column_id"],
+                    value=iv["value"],
+                ))
+
+        for value in data.get("values", []):
             s.add(SaleValue(
                 sale_id=sale.id,
-                column_id=v["column_id"],
-                value=v["value"],
+                column_id=value["column_id"],
+                value=value["value"],
             ))
 
         s.delete(d)

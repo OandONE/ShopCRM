@@ -28,6 +28,7 @@ class User(SQLModel, table=True):
     can_manage_columns: bool = False
     can_manage_products: bool = True
     can_view_current_columns: bool = False
+    can_view_purchase_cost: bool = False
 
     def has_permission(self, name: str) -> bool:
         if self.role == "owner":
@@ -58,6 +59,7 @@ class StoreSettings(SQLModel, table=True):
     phone: Optional[str] = None
     address: Optional[str] = None
     currency: str = "تومان"
+    return_deduction_percent: int = 15
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
 
 
@@ -81,12 +83,15 @@ class AuditLog(SQLModel, table=True):
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
 
 
-# Products (by price and history)
+# Products, stock and price history
 
 class Product(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     name: str = Field(unique=True, index=True)
     price: Optional[int] = None
+    purchase_price: Optional[int] = None
+    stock_quantity: int = 0
+    is_active: bool = True
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
     created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
@@ -98,8 +103,22 @@ class ProductPriceHistory(SQLModel, table=True):
     product_id: int = Field(foreign_key="product.id", index=True)
     old_price: Optional[int] = None
     new_price: Optional[int] = None
+    old_purchase_price: Optional[int] = None
+    new_purchase_price: Optional[int] = None
     changed_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     changed_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+
+
+class InventoryMovement(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    product_id: int = Field(foreign_key="product.id", index=True)
+    quantity_change: int
+    reason: str = Field(index=True)
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+    note: Optional[str] = None
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
 
 
 # Columns (by scope)
@@ -122,6 +141,8 @@ class Sale(SQLModel, table=True):
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
     created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     note: Optional[str] = None
+    
+    discount_amount: int = 0
 
 
 class SaleValue(SQLModel, table=True):
@@ -133,16 +154,24 @@ class SaleValue(SQLModel, table=True):
 
 
 class SaleItem(SQLModel, table=True):
-    """هر قلم کالا در فاکتور"""
+    """هر قلم کالا در فاکتور؛ قیمت‌ها و نام به‌صورت snapshot نگهداری می‌شوند."""
     id: int = Field(default=None, primary_key=True)
     sale_id: int = Field(foreign_key="sale.id", index=True)
     product_id: Optional[int] = Field(default=None, foreign_key="product.id")
     product_name: str
     quantity: int = 1
-    db_unit_price: Optional[int] = None        # snapshot قیمت دیتابیس در لحظه فروش
-    manual_unit_price: int = 0                  # قیمت وارد‌شده توسط فروشنده
-    discount_per_unit: int = 0                  # تخفیف صریح هر واحد
-    final_unit_price: int = 0                   # manual - discount (محاسبه و ذخیره)
+    db_unit_price: Optional[int] = None
+    purchase_unit_price: Optional[int] = None
+    inventory_deducted: bool = False
+    manual_unit_price: int = 0
+    discount_per_unit: int = 0
+    # تخفیف یک‌جای این ردیف (برای مجموع تعداد همان کالا)
+    discount_total: int = 0
+    # سهم این ردیف از تخفیف کل فاکتور؛ برای حفظ محاسبه تاریخی مرجوعی
+    invoice_discount_share: int = 0
+    # مبلغ نهایی این ردیف پس از همه تخفیف‌ها؛ برای داده‌های قدیمی NULL است
+    final_line_total: Optional[int] = None
+    final_unit_price: int = 0
 
 
 class SaleItemValue(SQLModel, table=True):
@@ -159,4 +188,27 @@ class DeletedSale(SQLModel, table=True):
     data_json: str
     deleted_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     deleted_at: NaiveDatetime = Field(default_factory=utcnow_naive)
-    
+
+
+# Returns: each return event is kept independently; partial and repeated returns are supported
+
+class SaleReturn(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    sale_id: int = Field(foreign_key="sale.id", index=True)
+    total_refund: int = 0
+    note: Optional[str] = None
+    accepted_by_seller: bool = True
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
+
+
+class SaleReturnItem(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    return_id: int = Field(foreign_key="salereturn.id", index=True)
+    sale_item_id: int = Field(foreign_key="saleitem.id", index=True)
+    quantity: int
+    restock_quantity: int = 0
+    deduction_percent: int = 15
+    suggested_refund_amount: int = 0
+    refund_amount: int = 0
+

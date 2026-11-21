@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}مرجوعی فاکتور #{{ sale.id }} - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+  <h2 class="h3 mb-0"><i class="bi bi-arrow-return-left"></i> مرجوعی فاکتور #{{ sale.id }}</h2>
+  <a href="/returns" class="btn btn-outline-secondary">فهرست فاکتورها</a>
+</div>
+<div class="alert alert-info">
+  تصمیم قبول مرجوعی با فروشنده است. برای هر قلم، تعداد دریافتی و تعداد قابل برگشت به موجودی را جداگانه وارد کنید. تعداد باقی‌مانده را می‌توان در مراجعات بعدی مرجوع کرد.
+</div>
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-primary text-white">ثبت یک نوبت مرجوعی</div>
+  <div class="card-body">
+    <input type="hidden" id="return-csrf" value="{{ csrf_token }}">
+    <div class="d-flex justify-content-end mb-2">
+      <button type="button" class="btn btn-sm btn-outline-primary" id="fill-full-return">انتخاب باقی‌مانده همه اقلام (مرجوعی کامل)</button>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle">
+        <thead class="table-dark">
+          <tr><th>کالا</th><th>خریداری‌شده</th><th>مرجوعی قبلی</th><th>باقی‌مانده</th><th>تعداد دریافتی</th><th>برگشت به انبار</th><th>مبلغ پیشنهادی</th><th>مبلغ نهایی (قابل ویرایش)</th></tr>
+        </thead>
+        <tbody>
+        {% for row in item_rows %}
+          {% set item = row.item %}
+          <tr class="return-line"
+              data-item-id="{{ item.id }}"
+              data-original-qty="{{ item.quantity }}"
+              data-returned-qty="{{ row.returned_qty }}"
+              data-line-payable="{{ row.payable_total }}"
+              data-percent="{{ deduction_percent }}"
+              data-can-restock="{{ '1' if row.can_restock else '0' }}">
+            <td>
+              <strong>{{ item.product_name }}</strong>
+              <div class="small text-body-secondary">مبلغ این ردیف پس از همه تخفیف‌ها: {{ '{:,}'.format(row.payable_total) }} تومان</div>
+              {% if not row.can_restock %}<div class="small text-warning">این قلم به موجودی انبار متصل نیست.</div>{% endif %}
+            </td>
+            <td>{{ item.quantity }}</td>
+            <td>{{ row.returned_qty }}</td>
+            <td><span class="badge text-bg-secondary remaining-qty">{{ row.remaining_qty }}</span></td>
+            <td><input class="form-control form-control-sm return-qty" type="number" min="0" max="{{ row.remaining_qty }}" value="0" style="min-width:85px" {% if row.remaining_qty == 0 %}disabled{% endif %}></td>
+            <td>
+              <input class="form-control form-control-sm restock-qty" type="number" min="0" max="0" value="0" style="min-width:85px" {% if not row.can_restock or row.remaining_qty == 0 %}disabled{% endif %}>
+              <small class="text-body-secondary">فقط سالم‌ها</small>
+            </td>
+            <td><span class="suggested-refund">—</span></td>
+            <td><input class="form-control form-control-sm refund-amount" type="number" min="0" value="0" style="min-width:130px" disabled></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="row g-3 mt-1">
+      <div class="col-md-8">
+        <label class="form-label">توضیح (اختیاری)</label>
+        <textarea id="return-note" class="form-control" rows="2" maxlength="1000" placeholder="مثلاً: دو عدد سالم، یک عدد خراب"></textarea>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100">
+          <div class="small text-body-secondary">درصد کسر پیش‌فرض</div>
+          <div class="fs-4 fw-bold">{{ deduction_percent }}٪</div>
+          <div class="small text-body-secondary">مبلغ پیشنهادی با این درصد محاسبه می‌شود؛ مبلغ نهایی برای هر قلم قابل ویرایش است.</div>
+        </div>
+      </div>
+    </div>
+    <div class="form-check mt-3">
+      <input class="form-check-input" type="checkbox" id="seller-accepted">
+      <label class="form-check-label" for="seller-accepted">من به‌عنوان فروشنده، این مرجوعی را پذیرفته‌ام و جزئیات آن را تأیید می‌کنم.</label>
+    </div>
+    <div id="return-error" class="alert alert-danger mt-3 d-none"></div>
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
+      <strong>جمع بازپرداخت این نوبت: <span id="return-total">۰</span> تومان</strong>
+      <button id="submit-return" type="button" class="btn btn-primary"><i class="bi bi-check2-circle"></i> ثبت این نوبت مرجوعی</button>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header bg-secondary text-white">سوابق مرجوعی این فاکتور</div>
+  <div class="card-body">
+    {% for ret in return_rows %}
+      <div class="border rounded p-3 mb-3">
+        <div class="d-flex justify-content-between flex-wrap gap-2">
+          <strong>مرجوعی #{{ ret.id }} · {{ ret.created_at.strftime('%Y-%m-%d %H:%M') }}</strong>
+          <strong class="text-success">بازپرداخت: {{ '{:,}'.format(ret.total_refund) }} تومان</strong>
+        </div>
+        <div class="small text-body-secondary mt-1">ثبت‌کننده: {{ ret.actor }}{% if ret.note %} · توضیح: {{ ret.note }}{% endif %}</div>
+        <ul class="mb-0 mt-2">
+          {% for it in ret["items"] %}
+            <li>{{ it.quantity }} عدد «{{ it.name }}»؛ برگشت به موجودی: {{ it.restock_quantity }} عدد؛ خارج از موجودی قابل فروش: {{ it.quantity - it.restock_quantity }} عدد؛ کسر ثبت‌شده: {{ it.deduction_percent }}٪؛ بازپرداخت: {{ '{:,}'.format(it.refund_amount) }} تومان</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% else %}
+      <div class="text-center text-body-secondary py-3">هنوز مرجوعی‌ای برای این فاکتور ثبت نشده است.</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const lines = [...document.querySelectorAll('.return-line')];
+  const totalEl = document.getElementById('return-total');
+  const submit = document.getElementById('submit-return');
+  const errorEl = document.getElementById('return-error');
+  const fmt = n => Number(n || 0).toLocaleString('en-US');
+
+  function updateTotal() {
+    const total = lines.reduce((sum, line) => sum + Math.max(0, Number(line.querySelector('.refund-amount').value || 0)), 0);
+    totalEl.textContent = fmt(total);
+  }
+  lines.forEach(line => {
+    const qty = line.querySelector('.return-qty');
+    const restock = line.querySelector('.restock-qty');
+    const refund = line.querySelector('.refund-amount');
+    const suggested = line.querySelector('.suggested-refund');
+    qty.addEventListener('input', () => {
+      let q = Math.max(0, Math.min(Number(qty.max || 0), Math.floor(Number(qty.value || 0))));
+      qty.value = q;
+      restock.max = q;
+      
+      restock.value = line.dataset.canRestock === '1' ? q : 0;
+      refund.disabled = q === 0;
+      const originalQty = Math.max(1, Number(line.dataset.originalQty || 1));
+      const alreadyReturned = Math.max(0, Number(line.dataset.returnedQty || 0));
+      const linePayable = Math.max(0, Number(line.dataset.linePayable || 0));
+      const pct = Number(line.dataset.percent || 15);
+      const beforeAmount = Math.floor(linePayable * alreadyReturned / originalQty);
+      const afterAmount = Math.floor(linePayable * (alreadyReturned + q) / originalQty);
+      const returnedBasisAmount = Math.max(0, afterAmount - beforeAmount);
+      const amount = Math.floor((returnedBasisAmount * (100 - pct) + 50) / 100);
+      suggested.textContent = q ? fmt(amount) + ' تومان' : '—';
+      refund.value = q ? amount : 0;
+      updateTotal();
+    });
+    refund.addEventListener('input', updateTotal);
+    restock.addEventListener('input', () => {
+      restock.value = Math.max(0, Math.min(Number(restock.max || 0), Math.floor(Number(restock.value || 0))));
+    });
+  });
+
+  document.getElementById('fill-full-return')?.addEventListener('click', () => {
+    lines.forEach(line => {
+      const qty = line.querySelector('.return-qty');
+      if (!qty.disabled) {
+        qty.value = qty.max || 0;
+        qty.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+    });
+  });
+
+  submit.addEventListener('click', async () => {
+    errorEl.classList.add('d-none');
+    if (!document.getElementById('seller-accepted').checked) {
+      errorEl.textContent = 'برای ثبت، تأیید فروشنده الزامی است.';
+      errorEl.classList.remove('d-none');
+      return;
+    }
+    const items = [];
+    for (const line of lines) {
+      const qty = Number(line.querySelector('.return-qty').value || 0);
+      if (!qty) continue;
+      const restock = Number(line.querySelector('.restock-qty').value || 0);
+      const refund = Number(line.querySelector('.refund-amount').value || 0);
+      if (restock > qty || restock < 0 || refund < 0 || !Number.isInteger(refund)) {
+        errorEl.textContent = 'تعداد برگشت به انبار یا مبلغ بازپرداخت نامعتبر است.';
+        errorEl.classList.remove('d-none');
+        return;
+      }
+      items.push({sale_item_id: Number(line.dataset.itemId), quantity: qty,
+                  restock_quantity: restock, refund_amount: refund});
+    }
+    if (!items.length) {
+      errorEl.textContent = 'حداقل تعداد یک قلم را برای مرجوعی وارد کنید.';
+      errorEl.classList.remove('d-none');
+      return;
+    }
+    submit.disabled = true;
+    const oldText = submit.innerHTML;
+    submit.innerHTML = '<span class="spinner-border spinner-border-sm"></span> در حال ثبت...';
+    try {
+      const res = await fetch('/api/sales/{{ sale.id }}/returns', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': document.getElementById('return-csrf').value},
+        body: JSON.stringify({accepted_by_seller: true, note: document.getElementById('return-note').value, items})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'خطا در ثبت مرجوعی');
+      window.location.href = data.redirect;
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.remove('d-none');
+      submit.disabled = false;
+      submit.innerHTML = oldText;
+    }
+  });
+})();
+</script>
+{% endblock %}

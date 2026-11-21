@@ -119,8 +119,12 @@
   const dbPriceField = document.getElementById('add-db-price');
   const manualPriceField = document.getElementById('add-manual-price');
   const discountField = document.getElementById('add-discount');
+  const discountModeField = document.getElementById('add-discount-mode');
+  const discountLabel = document.getElementById('add-discount-label');
   const qtyField = document.getElementById('add-qty');
+  const stockWarning = document.getElementById('add-stock-warning');
 
+  let selectedProductStock = null;
   let searchTimer = null;
   let lastQuery = '';
 
@@ -133,12 +137,16 @@
     prodDropdown.innerHTML = items.map(p => {
       const safe = escapeHtml(p.name);
       const priceTxt = p.price != null ? formatNumber(p.price) + ' ت' : 'بدون قیمت';
-      return `<div class="product-item" data-id="${p.id}" data-name="${safe}" data-price="${p.price ?? ''}"
+      const stock = Number(p.stock_quantity ?? 0);
+      const stockTxt = `موجودی: ${formatNumber(stock)}`;
+      return `<div class="product-item" data-id="${p.id}" data-name="${safe}"
+                data-price="${p.price ?? ''}" data-stock="${stock}"
                 style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #eee">
-                <div class="d-flex justify-content-between">
+                <div class="d-flex justify-content-between gap-2">
                   <span>${safe}</span>
                   <small class="text-muted">${priceTxt}</small>
                 </div>
+                <small class="${stock <= 0 ? 'text-danger' : 'text-secondary'}">${stockTxt}</small>
               </div>`;
     }).join('');
     prodDropdown.style.display = 'block';
@@ -149,6 +157,8 @@
       prodIdField.value = '';
       prodNameField.value = prodSearch.value.trim();
       dbPriceField.value = '';
+      selectedProductStock = null;
+      if (stockWarning) stockWarning.textContent = '';
       dbPriceField.classList.remove('field-auto');
       manualPriceField.classList.remove('field-auto');
 
@@ -173,6 +183,7 @@
       const name = item.dataset.name;
       const pid = item.dataset.id;
       const price = item.dataset.price;
+      selectedProductStock = Number(item.dataset.stock ?? 0);
       prodSearch.value = name;
       prodNameField.value = name;
       prodIdField.value = pid;
@@ -181,6 +192,7 @@
       manualPriceField.value = price ? formatNumber(price) : '';
       manualPriceField.classList.add('field-auto');
       hideProdDropdown();
+      updateStockWarning();
       manualPriceField.focus();
     });
 
@@ -191,12 +203,38 @@
     });
   }
 
+  function updateStockWarning() {
+    if (!stockWarning) return;
+    if (selectedProductStock === null || !prodIdField.value) {
+      stockWarning.textContent = '';
+      return;
+    }
+    const requested = Math.max(1, parseInt(qtyField.value || '1', 10) || 1);
+    const remaining = selectedProductStock - requested;
+    if (remaining < 0) {
+      stockWarning.className = 'small mt-2 text-warning-emphasis';
+      stockWarning.textContent = `⚠️ موجودی کافی نیست؛ موجودی فعلی ${formatNumber(selectedProductStock)} است. ثبت فروش انجام می‌شود و موجودی منفی خواهد شد.`;
+    } else {
+      stockWarning.className = 'small mt-2 text-success';
+      stockWarning.textContent = `موجودی فعلی: ${formatNumber(selectedProductStock)} عدد`;
+    }
+  }
+
+  if (qtyField) qtyField.addEventListener('input', updateStockWarning);
+
   if (manualPriceField) {
     manualPriceField.addEventListener('input', () => {
       manualPriceField.classList.remove('field-auto');
       manualPriceField.value = formatNumber(parseNumber(manualPriceField.value));
     });
   }
+  function updateDiscountModeLabel() {
+    if (discountLabel && discountModeField) {
+      discountLabel.textContent = discountModeField.value === 'line' ? 'تخفیف کل این ردیف (تومان)' : 'تخفیف هر واحد (تومان)';
+    }
+  }
+  if (discountModeField) discountModeField.addEventListener('change', updateDiscountModeLabel);
+  updateDiscountModeLabel();
   if (discountField) {
     discountField.addEventListener('input', () => {
       discountField.value = formatNumber(parseNumber(discountField.value));
@@ -214,13 +252,17 @@
       const pid = pidRaw ? parseInt(pidRaw, 10) : null;
       const dbPrice = dbPriceField.value ? parseNumber(dbPriceField.value) : null;
       const manualPrice = parseNumber(manualPriceField.value);
-      const discount = parseNumber(discountField.value);
+      const enteredDiscount = parseNumber(discountField.value);
       const qty = parseInt(qtyField.value || '1', 10);
+      const discountMode = discountModeField?.value || 'unit';
+      const discountPerUnit = discountMode === 'unit' ? enteredDiscount : 0;
+      const discountTotal = discountMode === 'line' ? enteredDiscount : 0;
 
       if (qty < 1) return alert('تعداد حداقل ۱ است');
       if (manualPrice < 0) return alert('قیمت منفی مجاز نیست');
-      if (discount < 0) return alert('تخفیف منفی مجاز نیست');
-      if (discount > manualPrice) return alert('تخفیف بیشتر از قیمت است');
+      if (enteredDiscount < 0) return alert('تخفیف منفی مجاز نیست');
+      if (discountPerUnit > manualPrice) return alert('تخفیف هر واحد بیشتر از قیمت است');
+      if (discountTotal > (manualPrice - discountPerUnit) * qty) return alert('تخفیف کل ردیف بیشتر از مبلغ آن است');
 
       const custom = {};
       form.querySelectorAll('[data-item-col]').forEach(el => {
@@ -228,13 +270,14 @@
         if (v) custom[el.dataset.itemCol] = v;
       });
 
-      const finalPrice = manualPrice - discount;
-      const existing = cart.find(it =>
+      const finalPrice = manualPrice - discountPerUnit;
+      const existing = discountTotal === 0 ? cart.find(it =>
         it.product_id === pid &&
         it.product_name === name &&
         it.manual_unit_price === manualPrice &&
-        it.discount_per_unit === discount
-      );
+        it.discount_per_unit === discountPerUnit &&
+        Number(it.discount_total || 0) === 0
+      ) : null;
 
       if (existing) {
         existing.quantity += qty;
@@ -245,7 +288,8 @@
           quantity: qty,
           db_unit_price: dbPrice,
           manual_unit_price: manualPrice,
-          discount_per_unit: discount,
+          discount_per_unit: discountPerUnit,
+          discount_total: discountTotal,
           final_unit_price: finalPrice,
           custom_values: custom,
         });
@@ -258,10 +302,14 @@
       prodNameField.value = '';
       prodIdField.value = '';
       dbPriceField.value = '';
+      selectedProductStock = null;
+      if (stockWarning) stockWarning.textContent = '';
       dbPriceField.classList.remove('field-auto');
       manualPriceField.value = '';
       manualPriceField.classList.remove('field-auto');
       discountField.value = '0';
+      if (discountModeField) discountModeField.value = 'unit';
+      updateDiscountModeLabel();
       qtyField.value = '1';
       form.querySelectorAll('[data-item-col]').forEach(el => el.value = '');
       prodSearch.focus();
@@ -283,8 +331,25 @@
     renderCart();
   };
 
+  const invoiceDiscountField = document.getElementById('invoice-discount-amount');
+  const invoiceDiscountError = document.getElementById('invoice-discount-error');
+
   function renderCart() {
     if (cartCountEl) cartCountEl.textContent = cart.length;
+    let itemDiscount = 0;
+    let subtotal = 0;
+    cart.forEach(it => {
+      const qty = Number(it.quantity || 0);
+      const unitDiscount = Number(it.discount_per_unit || 0) * qty;
+      const lineDiscount = Number(it.discount_total || 0);
+      itemDiscount += unitDiscount + lineDiscount;
+      subtotal += Math.max(0, Number(it.final_unit_price || 0) * qty - lineDiscount);
+    });
+    const invoiceDiscount = parseNumber(invoiceDiscountField?.value || '0');
+    const invalidInvoiceDiscount = invoiceDiscount > subtotal;
+    const payable = Math.max(0, subtotal - invoiceDiscount);
+    if (invoiceDiscountError) invoiceDiscountError.classList.toggle('d-none', !invalidInvoiceDiscount);
+    if (invoiceDiscountField) invoiceDiscountField.classList.toggle('is-invalid', invalidInvoiceDiscount);
 
     if (!cart.length) {
       cartEmpty.classList.remove('d-none');
@@ -297,20 +362,20 @@
 
     cartEmpty.classList.add('d-none');
     cartWrap.classList.remove('d-none');
-    submitBtn.disabled = false;
-
-    let totalDiscount = 0, totalFinal = 0;
+    submitBtn.disabled = invalidInvoiceDiscount;
 
     cartTbody.innerHTML = cart.map((it, i) => {
-      const subtotal = it.final_unit_price * it.quantity;
-      totalDiscount += it.discount_per_unit * it.quantity;
-      totalFinal += subtotal;
+      const qty = Number(it.quantity || 0);
+      const subtotal = Math.max(0, Number(it.final_unit_price || 0) * qty - Number(it.discount_total || 0));
+      const discountText = Number(it.discount_total || 0) > 0
+        ? `کل ردیف: ${formatNumber(it.discount_total)}`
+        : `هر واحد: ${formatNumber(Number(it.discount_per_unit || 0))}`;
       return `<tr>
         <td>${escapeHtml(it.product_name)}</td>
-        <td>${it.quantity}</td>
+        <td>${qty}</td>
         <td><small>${it.db_unit_price != null ? formatNumber(it.db_unit_price) : '—'}</small></td>
         <td>${formatNumber(it.manual_unit_price)}</td>
-        <td>${formatNumber(it.discount_per_unit)}</td>
+        <td>${discountText}</td>
         <td><strong>${formatNumber(subtotal)}</strong></td>
         <td>
           <button type="button" class="btn btn-sm btn-outline-danger"
@@ -321,8 +386,14 @@
       </tr>`;
     }).join('');
 
-    if (totalDiscountEl) totalDiscountEl.textContent = formatToman(totalDiscount);
-    if (totalFinalEl) totalFinalEl.textContent = formatToman(totalFinal);
+    if (totalDiscountEl) totalDiscountEl.textContent = formatToman(itemDiscount + invoiceDiscount);
+    if (totalFinalEl) totalFinalEl.textContent = formatToman(payable);
+  }
+  if (invoiceDiscountField) {
+    invoiceDiscountField.addEventListener('input', () => {
+      invoiceDiscountField.value = formatNumber(parseNumber(invoiceDiscountField.value));
+      renderCart();
+    });
   }
 
   // clear cart
@@ -348,6 +419,10 @@
     }
 
     if (!cart.length) return alert('سبد خالی است');
+    const currentSubtotal = cart.reduce((sum, it) => sum + Math.max(0, Number(it.final_unit_price || 0) * Number(it.quantity || 0) - Number(it.discount_total || 0)), 0);
+    if (parseNumber(invoiceDiscountField?.value || '0') > currentSubtotal) {
+      return alert('تخفیف کل فاکتور نمی‌تواند از مبلغ سبد بیشتر باشد.');
+    }
 
     const saleValues = {};
     form.querySelectorAll('[data-sale-col]').forEach(el => {
@@ -364,8 +439,10 @@
         quantity: it.quantity,
         manual_unit_price: it.manual_unit_price,
         discount_per_unit: it.discount_per_unit,
+        discount_total: Number(it.discount_total || 0),
         custom_values: it.custom_values || {},
       })),
+      invoice_discount_amount: parseNumber(invoiceDiscountField?.value || '0'),
       datetime_edited: datetimeEdited,
     };
     if (datetimeEdited && customDatetime) payload.created_at = customDatetime;
@@ -391,8 +468,16 @@
       const data = await res.json();
       cart = [];
       saveCart();
-    //   window.location.href = data.redirect || ('/' + KIND);
+      if (invoiceDiscountField) invoiceDiscountField.value = '0';
+      renderCart();
+      submitBtn.innerHTML = origHTML;
       window.open(data.invoice_url, '_blank');
+      if (Array.isArray(data.stock_warnings) && data.stock_warnings.length) {
+        const details = data.stock_warnings.map(w =>
+          `«${w.product_name}»: موجودی ${formatNumber(w.previous_stock)}، فروش ${formatNumber(w.sold_quantity)}، موجودی نهایی ${formatNumber(w.new_stock)}`
+        ).join('\n');
+        alert('فاکتور ثبت شد، اما موجودی برخی کالاها منفی شد:\n' + details);
+      }
     } catch (err) {
       alert('خطا: ' + err.message);
       submitBtn.disabled = false;

@@ -79,7 +79,7 @@
     </div>
     <div class="card-body">
       <div class="row g-3">
-        <div class="col-md-4 product-wrapper" style="position:relative">
+        <div class="col-md-3 product-wrapper" style="position:relative">
           <label class="form-label">محصول</label>
           <input type="text" id="add-product-search" class="form-control"
                  placeholder="جستجو یا تایپ نام..." autocomplete="off">
@@ -90,6 +90,7 @@
                       z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.15)"></div>
           <input type="hidden" id="add-product-id">
           <input type="hidden" id="add-product-name">
+          <div id="add-stock-warning" class="small mt-2" aria-live="polite"></div>
         </div>
 
         <div class="col-md-2">
@@ -105,12 +106,20 @@
         </div>
 
         <div class="col-md-2">
-          <label class="form-label">تخفیف هر واحد</label>
+          <label class="form-label">نوع تخفیف این ردیف</label>
+          <select id="add-discount-mode" class="form-select">
+            <option value="unit">برای هر واحد</option>
+            <option value="line">برای کل تعداد</option>
+          </select>
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label" id="add-discount-label">تخفیف هر واحد</label>
           <input type="text" id="add-discount" class="form-control"
                  inputmode="numeric" value="0">
         </div>
 
-        <div class="col-md-2">
+        <div class="col-md-1">
           <label class="form-label">تعداد</label>
           <input type="number" id="add-qty" class="form-control" value="1" min="1">
         </div>
@@ -172,14 +181,19 @@
       </div>
     </div>
     <div class="card-footer bg-body-secondary">
-      <div class="row g-2">
-        <div class="col-md-6">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-4">
+          <label for="invoice-discount-amount" class="form-label mb-1">تخفیف روی کل مبلغ فاکتور (تومان)</label>
+          <input type="text" id="invoice-discount-amount" class="form-control" inputmode="numeric" value="0">
+          <small id="invoice-discount-error" class="text-danger d-none">تخفیف کل از مبلغ سبد بیشتر است.</small>
+        </div>
+        <div class="col-md-4">
           <div class="d-flex justify-content-between align-items-center">
-            <span><i class="bi bi-tag text-danger"></i> تخفیف کل:</span>
+            <span><i class="bi bi-tag text-danger"></i> مجموع تخفیف‌ها:</span>
             <strong id="total-discount" class="text-danger">۰ تومان</strong>
           </div>
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <div class="d-flex justify-content-between align-items-center">
             <span><i class="bi bi-cash-coin text-success"></i> مبلغ قابل پرداخت:</span>
             <strong id="total-final" class="text-success fs-5">۰ تومان</strong>

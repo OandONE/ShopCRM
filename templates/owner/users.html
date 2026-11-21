@@ -55,6 +55,7 @@
                   {% if u.can_manage_columns %}{% set _ = perms.append('ستون‌ها') %}{% endif %}
                   {% if u.can_manage_products %}{% set _ = perms.append('محصولات') %}{% endif %}
                   {% if u.can_view_current_columns %}{% set _ = perms.append('مشاهده ستون‌ها') %}{% endif %}
+                  {% if u.can_view_purchase_cost %}{% set _ = perms.append('قیمت خرید') %}{% endif %}
                   {{ perms | join('، ') if perms else 'هیچ' }}
                 </small>
               {% endif %}

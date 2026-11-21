@@ -53,14 +53,25 @@
 <div class="card shadow-sm mb-4">
   <div class="card-header bg-success text-white"><i class="bi bi-box"></i> مدیریت محصولات</div>
   <div class="card-body">
-    <form method="POST" action="/api/product/add" class="row g-2 mb-4">
+    <form method="POST" action="/api/product/add" class="row g-2 align-items-end mb-4">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="col-md-6">
+      <div class="col-md-4">
+        <label class="form-label small">نام محصول</label>
         <input type="text" class="form-control" name="name" placeholder="نام محصول جدید" required>
       </div>
-      <div class="col-md-4">
-        <input type="text" class="form-control" name="price" inputmode="numeric"
-               placeholder="قیمت (تومان)">
+      <div class="col-md-2">
+        <label class="form-label small">قیمت فروش (تومان)</label>
+        <input type="text" class="form-control" name="price" inputmode="numeric" placeholder="قیمت فروش">
+      </div>
+      {% if can_view_purchase_cost %}
+      <div class="col-md-2">
+        <label class="form-label small">قیمت خرید (تومان)</label>
+        <input type="text" class="form-control" name="purchase_price" inputmode="numeric" placeholder="قیمت خرید">
+      </div>
+      {% endif %}
+      <div class="col-md-2">
+        <label class="form-label small">موجودی اولیه</label>
+        <input type="number" class="form-control" name="stock_quantity" min="0" value="0">
       </div>
       <div class="col-md-2">
         <button type="submit" class="btn btn-success w-100">
@@ -74,7 +85,10 @@
         <thead class="table-dark">
           <tr>
             <th>نام</th>
-            <th>قیمت</th>
+            <th>قیمت فروش</th>
+            {% if can_view_purchase_cost %}<th>قیمت خرید</th>{% endif %}
+            <th>موجودی</th>
+            <th>وضعیت</th>
             <th>افزوده‌شده</th>
             <th>آخرین تغییر</th>
             <th class="text-center">عملیات</th>
@@ -87,40 +101,56 @@
             <td>
               {% if p.price is not none %}
                 <span class="text-success fw-semibold">{{ '{:,}'.format(p.price) }} ت</span>
-              {% else %}
-                <span class="text-muted">—</span>
-              {% endif %}
+              {% else %}<span class="text-muted">—</span>{% endif %}
             </td>
+            {% if can_view_purchase_cost %}
+            <td>
+              {% if p.purchase_price is not none %}
+                <span class="text-body fw-semibold">{{ '{:,}'.format(p.purchase_price) }} ت</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            {% endif %}
+            <td><span class="badge {{ 'text-bg-danger' if p.stock_quantity < 0 else 'text-bg-secondary' }}">{{ '{:,}'.format(p.stock_quantity) }}</span></td>
+            <td>{% if p.is_active %}<span class="badge text-bg-success">فعال</span>{% else %}<span class="badge text-bg-secondary">غیرفعال</span>{% endif %}</td>
             <td class="small text-body-secondary" data-timestamp="{{ p.created_at.isoformat() }}"></td>
             <td class="small text-body-secondary">
               <span data-timestamp="{{ p.updated_at.isoformat() }}"></span>
-              {% if product_creators.get(p.id) %}
-                · <code>{{ product_creators[p.id] }}</code>
-              {% endif %}
+              {% if product_creators.get(p.id) %} · <code>{{ product_creators[p.id] }}</code>{% endif %}
             </td>
             <td class="text-center">
               <div class="btn-group btn-group-sm">
-                <button type="button" class="btn btn-outline-primary"
-                        onclick="editProduct({{ p.id }}, '{{ p.name|e }}', {{ p.price if p.price is not none else 'null' }})">
+                <button type="button" class="btn btn-outline-primary" title="ویرایش"
+                        onclick='editProduct({{ p.id }}, {{ p.name|tojson }}, {{ p.price if p.price is not none else 'null' }}, {% if can_view_purchase_cost and p.purchase_price is not none %}{{ p.purchase_price }}{% else %}null{% endif %}, {{ p.stock_quantity }})'>
                   <i class="bi bi-pencil"></i>
                 </button>
-                <button type="button" class="btn btn-outline-info"
-                        onclick="showProductHistory({{ p.id }}, '{{ p.name|e }}')">
+                <button type="button" class="btn btn-outline-info" title="تاریخچه قیمت"
+                        onclick='showProductHistory({{ p.id }}, {{ p.name|tojson }})'>
                   <i class="bi bi-clock-history"></i>
                 </button>
+                <button type="button" class="btn btn-outline-secondary" title="تاریخچه انبار"
+                        onclick='showStockHistory({{ p.id }}, {{ p.name|tojson }})'>
+                  <i class="bi bi-box-seam"></i>
+                </button>
+                {% if p.is_active %}
                 <form method="POST" action="/api/product/delete" class="d-inline"
-                      onsubmit="return confirm('حذف «{{ p.name }}»؟')">
+                      onsubmit="return confirm('محصول غیرفعال شود؟ سوابق فاکتور حفظ می‌شوند.')">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="id" value="{{ p.id }}">
-                  <button type="submit" class="btn btn-outline-danger">
-                    <i class="bi bi-trash"></i>
+                  <button type="submit" class="btn btn-outline-danger" title="غیرفعال‌سازی">
+                    <i class="bi bi-archive"></i>
                   </button>
                 </form>
+                {% else %}
+                <form method="POST" action="/api/product/{{ p.id }}/activate" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="btn btn-outline-success" title="فعال‌سازی مجدد"><i class="bi bi-arrow-counterclockwise"></i></button>
+                </form>
+                {% endif %}
               </div>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="5" class="text-center text-body-secondary py-4">هیچ محصولی وجود ندارد</td></tr>
+          <tr><td colspan="{{ 8 if can_view_purchase_cost else 7 }}" class="text-center text-body-secondary py-4">هیچ محصولی وجود ندارد</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -144,9 +174,21 @@
             <input type="text" class="form-control" name="name" id="edit-prod-name" required>
           </div>
           <div class="mb-3">
-            <label class="form-label">قیمت (تومان)</label>
+            <label class="form-label">قیمت فروش (تومان)</label>
             <input type="text" class="form-control" name="price" id="edit-prod-price" inputmode="numeric">
             <div class="form-text">خالی بگذارید اگر قیمت ندارد.</div>
+          </div>
+          {% if can_view_purchase_cost %}
+          <div class="mb-3">
+            <label class="form-label">قیمت خرید (تومان)</label>
+            <input type="text" class="form-control" name="purchase_price" id="edit-prod-purchase-price" inputmode="numeric">
+            <div class="form-text">این مقدار فقط برای کاربران دارای دسترسی قیمت خرید نمایش داده می‌شود.</div>
+          </div>
+          {% endif %}
+          <div class="mb-3">
+            <label class="form-label">موجودی فعلی</label>
+            <input type="number" class="form-control" name="stock_quantity" id="edit-prod-stock" step="1">
+            <div class="form-text">تغییر این عدد به‌عنوان اصلاح دستی در تاریخچه انبار ثبت می‌شود.</div>
           </div>
         </div>
         <div class="modal-footer">
@@ -170,6 +212,45 @@
         <div id="history-body">در حال بارگذاری...</div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Stock history modal -->
+<div class="modal fade" id="stockHistoryModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-box-seam"></i> تاریخچه موجودی: <span id="stock-history-prod-name"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body"><div id="stock-history-body">در حال بارگذاری...</div></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if current_user.has_permission('view_sales') %}
+<div class="card shadow-sm mb-4">
+  <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div><h5 class="mb-1"><i class="bi bi-arrow-return-left"></i> مرجوعی فاکتورها</h5><div class="text-body-secondary small">ثبت مرجوعی کامل، جزئی و چندمرحله‌ای</div></div>
+    <a href="/returns" class="btn btn-outline-primary">مشاهده فاکتورها و ثبت مرجوعی</a>
+  </div>
+</div>
+{% endif %}
+
+{% if current_user.is_owner() %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-warning-subtle"><i class="bi bi-sliders"></i> تنظیمات مرجوعی (مالک)</div>
+  <div class="card-body">
+    <form method="POST" action="/api/owner/return-settings/update" class="row g-2 align-items-end">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label">درصد کسر از مبلغ مرجوعی</label>
+        <div class="input-group"><input class="form-control" type="number" name="return_deduction_percent" min="0" max="100" value="{{ return_deduction_percent }}" required><span class="input-group-text">٪</span></div>
+      </div>
+      <div class="col-sm-4"><button class="btn btn-warning" type="submit">ذخیره درصد</button></div>
+    </form>
+    <div class="form-text mt-2">درصد پیش‌فرض ۱۵٪ است. هنگام ثبت هر مرجوعی، مبلغ پیشنهادی محاسبه می‌شود و فروشنده می‌تواند مبلغ نهایی را ویرایش کند.</div>
   </div>
 </div>
 {% endif %}
@@ -228,17 +309,29 @@
 {% endblock %}
 
 {% block scripts %}
+{% if current_user.has_permission('manage_products') %}
 <script>
 const editModal = new bootstrap.Modal(document.getElementById('editProductModal'));
 const histModal = new bootstrap.Modal(document.getElementById('historyModal'));
+const stockHistModal = new bootstrap.Modal(document.getElementById('stockHistoryModal'));
+const canViewPurchaseCost = {{ can_view_purchase_cost|tojson }};
 
-function editProduct(id, name, price) {
+function editProduct(id, name, price, purchasePrice, stock) {
   const form = document.getElementById('editProductForm');
   form.action = '/api/product/' + id + '/update';
   document.getElementById('edit-prod-name').value = name;
   document.getElementById('edit-prod-price').value = price != null ? String(price).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+  const purchaseField = document.getElementById('edit-prod-purchase-price');
+  if (purchaseField) purchaseField.value = purchasePrice != null ? String(purchasePrice).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+  document.getElementById('edit-prod-stock').value = stock ?? 0;
   editModal.show();
 }
+
+function formatDate(value) {
+  return new Intl.DateTimeFormat('fa-IR', {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', timeZone:'Asia/Tehran'}).format(new Date(value));
+}
+function escapeCell(value) { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function formatN(n) { return n != null ? String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '—'; }
 
 async function showProductHistory(id, name) {
   document.getElementById('history-prod-name').textContent = name;
@@ -247,35 +340,30 @@ async function showProductHistory(id, name) {
   histModal.show();
   try {
     const res = await fetch('/api/product/' + id + '/history');
+    if (!res.ok) throw new Error('history');
     const rows = await res.json();
-    if (!rows.length) {
-      body.innerHTML = '<div class="alert alert-info">هیچ تغییر قیمتی ثبت نشده.</div>';
-      return;
-    }
-    const formatN = n => n != null ? String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '—';
-    const html = rows.map(r => {
-      const when = new Intl.DateTimeFormat('fa-IR', {
-        year:'numeric', month:'2-digit', day:'2-digit',
-        hour:'2-digit', minute:'2-digit', timeZone:'Asia/Tehran'
-      }).format(new Date(r.changed_at));
-      return `<tr>
-        <td>${when}</td>
-        <td><code>${r.changed_by}</code></td>
-        <td>${formatN(r.old_price)}</td>
-        <td>${formatN(r.new_price)}</td>
-      </tr>`;
-    }).join('');
-    body.innerHTML = `<div class="table-responsive">
-      <table class="table table-sm table-striped">
-        <thead class="table-dark">
-          <tr><th>زمان</th><th>توسط</th><th>قیمت قبلی</th><th>قیمت جدید</th></tr>
-        </thead>
-        <tbody>${html}</tbody>
-      </table>
-    </div>`;
-  } catch (e) {
-    body.innerHTML = '<div class="alert alert-danger">خطا در بارگذاری</div>';
-  }
+    if (!rows.length) { body.innerHTML = '<div class="alert alert-info">تغییری ثبت نشده است.</div>'; return; }
+    const costHeaders = canViewPurchaseCost ? '<th>قیمت خرید قبلی</th><th>قیمت خرید جدید</th>' : '';
+    const html = rows.map(r => `<tr><td>${formatDate(r.changed_at)}</td><td><code>${escapeCell(r.changed_by)}</code></td><td>${formatN(r.old_price)}</td><td>${formatN(r.new_price)}</td>${canViewPurchaseCost ? `<td>${formatN(r.old_purchase_price)}</td><td>${formatN(r.new_purchase_price)}</td>` : ''}</tr>`).join('');
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm table-striped"><thead class="table-dark"><tr><th>زمان</th><th>توسط</th><th>قیمت فروش قبلی</th><th>قیمت فروش جدید</th>${costHeaders}</tr></thead><tbody>${html}</tbody></table></div>`;
+  } catch { body.innerHTML = '<div class="alert alert-danger">خطا در بارگذاری تاریخچه قیمت.</div>'; }
+}
+
+async function showStockHistory(id, name) {
+  document.getElementById('stock-history-prod-name').textContent = name;
+  const body = document.getElementById('stock-history-body');
+  body.innerHTML = 'در حال بارگذاری...';
+  stockHistModal.show();
+  try {
+    const res = await fetch('/api/product/' + id + '/stock-history');
+    if (!res.ok) throw new Error('stock history');
+    const rows = await res.json();
+    if (!rows.length) { body.innerHTML = '<div class="alert alert-info">تغییری در موجودی ثبت نشده است.</div>'; return; }
+    const reasonLabels = {initial_stock:'موجودی اولیه', manual_adjustment:'اصلاح دستی', sale:'فروش', sale_deleted:'حذف فاکتور', sale_restored:'بازیابی فاکتور', sale_return:'مرجوعی'};
+    const html = rows.map(r => `<tr><td>${formatDate(r.created_at)}</td><td class="${r.quantity_change < 0 ? 'text-danger' : 'text-success'}">${r.quantity_change > 0 ? '+' : ''}${formatN(r.quantity_change)}</td><td>${escapeCell(reasonLabels[r.reason] || r.reason)}</td><td>${escapeCell(r.created_by)}</td><td>${escapeCell(r.note)}</td></tr>`).join('');
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm table-striped"><thead class="table-dark"><tr><th>زمان</th><th>تغییر</th><th>نوع</th><th>توسط</th><th>توضیح</th></tr></thead><tbody>${html}</tbody></table></div>`;
+  } catch { body.innerHTML = '<div class="alert alert-danger">خطا در بارگذاری تاریخچه موجودی.</div>'; }
 }
 </script>
+{% endif %}
 {% endblock %}
