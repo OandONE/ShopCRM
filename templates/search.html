@@ -10,11 +10,11 @@
   <div class="card-body">
     <div class="row g-2 align-items-end">
       <div class="col-md-3">
-        <label class="form-label small">ستون</label>
+        <label class="form-label small" for="filter-column">ستون</label>
         <select id="filter-column" class="form-select"></select>
       </div>
       <div class="col-md-2">
-        <label class="form-label small">عملگر</label>
+        <label class="form-label small" for="filter-op">عملگر</label>
         <select id="filter-op" class="form-select">
           <option value="IN" selected>IN (یکی از مقادیر)</option>
           <option value="=">مساوی</option>
@@ -26,12 +26,12 @@
         </select>
       </div>
       <div class="col-md-3">
-        <label class="form-label small">مقدار</label>
+        <label class="form-label small" for="filter-value">مقدار</label>
         <input type="text" id="filter-value" class="form-control" placeholder="برای IN مقادیر را با ویرگول جدا کن...">
         <div class="form-text">برای عملگر IN چند مقدار را با کاما یا ویرگول فارسی جدا کن؛ مثال: مداد، دفتر</div>
       </div>
       <div class="col-md-2">
-        <label class="form-label small">ترکیب</label>
+        <label class="form-label small" for="filter-logic">ترکیب</label>
         <select id="filter-logic" class="form-select">
           <option value="AND">AND</option>
           <option value="OR">OR</option>
@@ -44,7 +44,8 @@
         </button>
       </div>
     </div>
-    <div id="active-filters" class="mt-3"></div>
+    <div class="keyboard-hint mt-2" role="note">F2 رفتن به مقدار فیلتر · Enter افزودن شرط · Ctrl+Enter اجرای جستجو</div>
+    <div id="active-filters" class="mt-3" aria-live="polite"></div>
   </div>
 </div>
 

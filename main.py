@@ -601,6 +601,11 @@ def product_search_page(request: Request, user: User = Depends(require_permissio
     return render(request, "simple_search.html")
 
 
+@app.get("/shortcuts", response_class=HTMLResponse)
+def shortcuts_page(request: Request, user: User = Depends(require_user)):
+    return render(request, "shortcuts.html")
+
+
 # Admin page
 
 @app.get("/admin", response_class=HTMLResponse)

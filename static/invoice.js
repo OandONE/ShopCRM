@@ -127,19 +127,67 @@
   let selectedProductStock = null;
   let searchTimer = null;
   let lastQuery = '';
+  let activeProductIndex = -1;
+
+  if (prodSearch) {
+    prodSearch.setAttribute('role', 'combobox');
+    prodSearch.setAttribute('aria-autocomplete', 'list');
+    prodSearch.setAttribute('aria-controls', 'add-product-dropdown');
+    prodSearch.setAttribute('aria-expanded', 'false');
+  }
 
   function hideProdDropdown() {
-    if (prodDropdown) { prodDropdown.style.display = 'none'; prodDropdown.innerHTML = ''; }
+    activeProductIndex = -1;
+    if (prodDropdown) {
+      prodDropdown.style.display = 'none';
+      prodDropdown.innerHTML = '';
+      prodSearch?.setAttribute('aria-expanded', 'false');
+      prodSearch?.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function updateActiveProduct() {
+    const options = [...(prodDropdown?.querySelectorAll('.product-item') || [])];
+    options.forEach((option, index) => {
+      const active = index === activeProductIndex;
+      option.setAttribute('aria-selected', active ? 'true' : 'false');
+      if (active) {
+        prodSearch.setAttribute('aria-activedescendant', option.id);
+        option.scrollIntoView({block: 'nearest'});
+      }
+    });
+    if (activeProductIndex < 0) prodSearch?.removeAttribute('aria-activedescendant');
+  }
+
+  function selectProductItem(item) {
+    if (!item) return;
+    const name = item.dataset.name;
+    const pid = item.dataset.id;
+    const price = item.dataset.price;
+    lastQuery = '';
+    selectedProductStock = Number(item.dataset.stock ?? 0);
+    prodSearch.value = name;
+    prodNameField.value = name;
+    prodIdField.value = pid;
+    dbPriceField.value = price ? formatNumber(price) : '';
+    dbPriceField.classList.add('field-auto');
+    manualPriceField.value = price ? formatNumber(price) : '';
+    manualPriceField.classList.add('field-auto');
+    hideProdDropdown();
+    updateStockWarning();
+    manualPriceField.focus();
   }
 
   function renderProdDropdown(items) {
     if (!items.length) { hideProdDropdown(); return; }
-    prodDropdown.innerHTML = items.map(p => {
+    activeProductIndex = -1;
+    prodDropdown.setAttribute('role', 'listbox');
+    prodDropdown.innerHTML = items.map((p, index) => {
       const safe = escapeHtml(p.name);
       const priceTxt = p.price != null ? formatNumber(p.price) + ' ت' : 'بدون قیمت';
       const stock = Number(p.stock_quantity ?? 0);
       const stockTxt = `موجودی: ${formatNumber(stock)}`;
-      return `<div class="product-item" data-id="${p.id}" data-name="${safe}"
+      return `<div id="add-product-option-${index}" class="product-item" role="option" aria-selected="false" data-id="${p.id}" data-name="${safe}"
                 data-price="${p.price ?? ''}" data-stock="${stock}"
                 style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #eee">
                 <div class="d-flex justify-content-between gap-2">
@@ -150,9 +198,29 @@
               </div>`;
     }).join('');
     prodDropdown.style.display = 'block';
+    prodSearch.setAttribute('aria-expanded', 'true');
   }
 
   if (prodSearch) {
+    prodSearch.addEventListener('keydown', (event) => {
+      const options = [...(prodDropdown?.querySelectorAll('.product-item') || [])];
+      if (event.key === 'ArrowDown' && options.length) {
+        event.preventDefault();
+        activeProductIndex = (activeProductIndex + 1) % options.length;
+        updateActiveProduct();
+      } else if (event.key === 'ArrowUp' && options.length) {
+        event.preventDefault();
+        activeProductIndex = activeProductIndex <= 0 ? options.length - 1 : activeProductIndex - 1;
+        updateActiveProduct();
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        if (options.length) selectProductItem(options[activeProductIndex >= 0 ? activeProductIndex : 0]);
+      } else if (event.key === 'Escape' && prodDropdown?.style.display === 'block') {
+        event.preventDefault();
+        hideProdDropdown();
+      }
+    });
+
     prodSearch.addEventListener('input', () => {
       prodIdField.value = '';
       prodNameField.value = prodSearch.value.trim();
@@ -163,9 +231,10 @@
       manualPriceField.classList.remove('field-auto');
 
       const q = prodSearch.value.trim();
-      if (!q) { hideProdDropdown(); return; }
+      if (!q) { hideProdDropdown(); lastQuery = ''; return; }
       if (q === lastQuery) return;
       lastQuery = q;
+      hideProdDropdown();
       clearTimeout(searchTimer);
       searchTimer = setTimeout(async () => {
         try {
@@ -180,20 +249,7 @@
       const item = e.target.closest('.product-item');
       if (!item) return;
       e.preventDefault();
-      const name = item.dataset.name;
-      const pid = item.dataset.id;
-      const price = item.dataset.price;
-      selectedProductStock = Number(item.dataset.stock ?? 0);
-      prodSearch.value = name;
-      prodNameField.value = name;
-      prodIdField.value = pid;
-      dbPriceField.value = price ? formatNumber(price) : '';
-      dbPriceField.classList.add('field-auto');
-      manualPriceField.value = price ? formatNumber(price) : '';
-      manualPriceField.classList.add('field-auto');
-      hideProdDropdown();
-      updateStockWarning();
-      manualPriceField.focus();
+      selectProductItem(item);
     });
 
     document.addEventListener('click', (e) => {
@@ -299,6 +355,8 @@
 
       // reset
       prodSearch.value = '';
+      lastQuery = '';
+      clearTimeout(searchTimer);
       prodNameField.value = '';
       prodIdField.value = '';
       dbPriceField.value = '';
@@ -329,6 +387,11 @@
     cart.splice(i, 1);
     saveCart();
     renderCart();
+    window.requestAnimationFrame(() => {
+      const removeButtons = cartTbody?.querySelectorAll('button[aria-label^="حذف"]') || [];
+      const nextButton = removeButtons[Math.min(i, removeButtons.length - 1)];
+      (nextButton || prodSearch)?.focus();
+    });
   };
 
   const invoiceDiscountField = document.getElementById('invoice-discount-amount');
@@ -379,8 +442,9 @@
         <td><strong>${formatNumber(subtotal)}</strong></td>
         <td>
           <button type="button" class="btn btn-sm btn-outline-danger"
+                  aria-label="حذف ${escapeHtml(it.product_name)} از سبد" title="حذف این قلم"
                   onclick="window.__removeFromCart(${i})">
-            <i class="bi bi-x"></i>
+            <i class="bi bi-x" aria-hidden="true"></i>
           </button>
         </td>
       </tr>`;
@@ -409,10 +473,11 @@
   }
 
   // submit
+  let submitting = false;
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (submitting) return;
 
-    
     if (dtEditor && !dtEditor.classList.contains('d-none') && dtInput.value) {
       customDatetime = new Date(dtInput.value).toISOString();
       datetimeEdited = true;
@@ -423,6 +488,11 @@
     if (parseNumber(invoiceDiscountField?.value || '0') > currentSubtotal) {
       return alert('تخفیف کل فاکتور نمی‌تواند از مبلغ سبد بیشتر باشد.');
     }
+
+    const invoiceDiscountAmount = parseNumber(invoiceDiscountField?.value || '0');
+    const payableAmount = Math.max(0, currentSubtotal - invoiceDiscountAmount);
+    const confirmMessage = `فاکتور ${cart.length} قلمی با مبلغ ${formatNumber(payableAmount)} تومان ثبت شود؟`;
+    if (!window.confirm(confirmMessage)) return;
 
     const saleValues = {};
     form.querySelectorAll('[data-sale-col]').forEach(el => {
@@ -448,6 +518,7 @@
     if (datetimeEdited && customDatetime) payload.created_at = customDatetime;
 
     const origHTML = submitBtn.innerHTML;
+    submitting = true;
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> در حال ثبت...';
 
@@ -471,6 +542,8 @@
       if (invoiceDiscountField) invoiceDiscountField.value = '0';
       renderCart();
       submitBtn.innerHTML = origHTML;
+      submitting = false;
+      submitBtn.disabled = false;
       window.open(data.invoice_url, '_blank');
       if (Array.isArray(data.stock_warnings) && data.stock_warnings.length) {
         const details = data.stock_warnings.map(w =>
@@ -482,6 +555,7 @@
       alert('خطا: ' + err.message);
       submitBtn.disabled = false;
       submitBtn.innerHTML = origHTML;
+      submitting = false;
     }
   });
 

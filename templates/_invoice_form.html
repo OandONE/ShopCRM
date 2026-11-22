@@ -11,11 +11,12 @@
         <span id="datetime-edited-badge" class="badge text-bg-warning d-none">
           <i class="bi bi-pencil"></i> دستکاری شده
         </span>
-        <button type="button" id="datetime-edit" class="btn btn-sm btn-outline-secondary ms-auto">
+        <button type="button" id="datetime-edit" class="btn btn-sm btn-outline-secondary ms-auto" aria-label="ویرایش تاریخ و ساعت فاکتور">
           <i class="bi bi-pencil"></i> ویرایش
         </button>
       </div>
       <div id="datetime-editor" class="mt-2 d-none">
+        <label class="form-label" for="datetime-input">تاریخ و ساعت جدید</label>
         <input type="datetime-local" id="datetime-input" class="form-control">
         <small id="datetime-jalali-preview" class="text-body-secondary d-block mt-1"></small>
         <div class="mt-2">
@@ -40,20 +41,20 @@
       <div class="row g-3">
         {% for col in sale_columns %}
         <div class="col-12 col-md-6">
-          <label class="form-label fw-semibold">
+          <label class="form-label fw-semibold" for="sale-col-{{ col.id }}">
             {{ col.name }}{% if col.required %}<span class="text-danger">*</span>{% endif %}
           </label>
           {% if col.type == "textarea" %}
-            <textarea class="form-control" rows="3" data-sale-col="{{ col.id }}"
+            <textarea id="sale-col-{{ col.id }}" class="form-control" rows="3" data-sale-col="{{ col.id }}"
                       {% if col.required %}required{% endif %}></textarea>
           {% elif col.type == "text" %}
-            <input type="text" class="form-control" data-sale-col="{{ col.id }}"
+            <input type="text" id="sale-col-{{ col.id }}" class="form-control" data-sale-col="{{ col.id }}"
                    {% if col.required %}required{% endif %}>
           {% elif col.type == "number" %}
-            <input type="text" inputmode="numeric" class="form-control" data-sale-col="{{ col.id }}"
+            <input type="text" inputmode="numeric" id="sale-col-{{ col.id }}" class="form-control" data-sale-col="{{ col.id }}"
                    {% if col.required %}required{% endif %}>
           {% elif col.type == "choice" %}
-            <select class="form-select" data-sale-col="{{ col.id }}"
+            <select id="sale-col-{{ col.id }}" class="form-select" data-sale-col="{{ col.id }}"
                     {% if col.required %}required{% endif %}>
               <option value="">— انتخاب کنید —</option>
               {% for opt in (col.options or "").split(",") %}
@@ -62,7 +63,7 @@
               {% endfor %}
             </select>
           {% else %}
-            <input type="text" class="form-control" data-sale-col="{{ col.id }}"
+            <input type="text" id="sale-col-{{ col.id }}" class="form-control" data-sale-col="{{ col.id }}"
                    {% if col.required %}required{% endif %}>
           {% endif %}
         </div>
@@ -80,33 +81,33 @@
     <div class="card-body">
       <div class="row g-3">
         <div class="col-md-3 product-wrapper" style="position:relative">
-          <label class="form-label">محصول</label>
+          <label class="form-label" for="add-product-search">محصول</label>
           <input type="text" id="add-product-search" class="form-control"
                  placeholder="جستجو یا تایپ نام..." autocomplete="off">
-          <div id="add-product-dropdown" class="product-dropdown"
+          <div id="add-product-dropdown" class="product-dropdown" aria-label="پیشنهادهای کالا"
                style="display:none;position:absolute;top:100%;left:0;right:0;
                       background:var(--bs-body-bg,#fff);border:1px solid #ccc;
                       border-radius:0 0 8px 8px;max-height:220px;overflow-y:auto;
                       z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.15)"></div>
           <input type="hidden" id="add-product-id">
           <input type="hidden" id="add-product-name">
-          <div id="add-stock-warning" class="small mt-2" aria-live="polite"></div>
+          <div id="add-stock-warning" class="small mt-2" role="status" aria-live="polite"></div>
         </div>
 
         <div class="col-md-2">
-          <label class="form-label">قیمت دیتابیس</label>
+          <label class="form-label" for="add-db-price">قیمت دیتابیس</label>
           <input type="text" id="add-db-price" class="form-control" readonly
                  placeholder="—">
         </div>
 
         <div class="col-md-2">
-          <label class="form-label">قیمت فروش</label>
+          <label class="form-label" for="add-manual-price">قیمت فروش</label>
           <input type="text" id="add-manual-price" class="form-control"
                  inputmode="numeric" placeholder="۰">
         </div>
 
         <div class="col-md-2">
-          <label class="form-label">نوع تخفیف این ردیف</label>
+          <label class="form-label" for="add-discount-mode">نوع تخفیف این ردیف</label>
           <select id="add-discount-mode" class="form-select">
             <option value="line">برای کل تعداد</option>
             <option value="unit">برای هر واحد</option>
@@ -114,34 +115,34 @@
         </div>
 
         <div class="col-md-2">
-          <label class="form-label" id="add-discount-label">تخفیف هر واحد</label>
+          <label class="form-label" id="add-discount-label" for="add-discount">تخفیف هر واحد</label>
           <input type="text" id="add-discount" class="form-control"
                  inputmode="numeric" value="0">
         </div>
 
         <div class="col-md-1">
-          <label class="form-label">تعداد</label>
+          <label class="form-label" for="add-qty">تعداد</label>
           <input type="number" id="add-qty" class="form-control" value="1" min="1">
         </div>
 
         {% for col in item_columns %}
         <div class="col-md-4">
-          <label class="form-label">
+          <label class="form-label" for="item-col-{{ col.id }}">
             {{ col.name }}{% if col.required %}<span class="text-danger">*</span>{% endif %}
           </label>
           {% if col.type == "text" %}
-            <input type="text" class="form-control" data-item-col="{{ col.id }}">
+            <input type="text" id="item-col-{{ col.id }}" class="form-control" data-item-col="{{ col.id }}">
           {% elif col.type == "number" %}
-            <input type="text" inputmode="numeric" class="form-control" data-item-col="{{ col.id }}">
+            <input type="text" inputmode="numeric" id="item-col-{{ col.id }}" class="form-control" data-item-col="{{ col.id }}">
           {% elif col.type == "choice" %}
-            <select class="form-select" data-item-col="{{ col.id }}">
+            <select id="item-col-{{ col.id }}" class="form-select" data-item-col="{{ col.id }}">
               <option value="">—</option>
               {% for opt in (col.options or "").split(",") %}
                 {% set o = opt.strip() %}{% if o %}<option value="{{ o }}">{{ o }}</option>{% endif %}
               {% endfor %}
             </select>
           {% else %}
-            <input type="text" class="form-control" data-item-col="{{ col.id }}">
+            <input type="text" id="item-col-{{ col.id }}" class="form-control" data-item-col="{{ col.id }}">
           {% endif %}
         </div>
         {% endfor %}
@@ -150,13 +151,16 @@
       <button type="button" id="add-to-cart" class="btn btn-primary mt-3">
         <i class="bi bi-cart-plus"></i> افزودن به سبد
       </button>
+      <div class="keyboard-hint mt-2" aria-label="راهنمای میانبرهای فروش">
+        F2 جستجوی کالا · Ctrl+Alt+Shift+M قیمت · Ctrl+Alt+Shift+Q تعداد · Ctrl+Alt+Shift+D تخفیف · Ctrl+Alt+Shift+I تخفیف فاکتور · Ctrl+Enter افزودن · Ctrl+Alt+Shift+Enter ثبت
+      </div>
     </div>
   </div>
 
   <!-- سبد -->
   <div class="card shadow-sm mb-3">
     <div class="card-header bg-success text-white">
-      <i class="bi bi-cart3"></i> سبد خرید (<span id="cart-count">0</span> قلم)
+      <i class="bi bi-cart3"></i> سبد خرید (<span id="cart-count" aria-live="polite" aria-atomic="true">0</span> قلم)
     </div>
     <div class="card-body">
       <div id="cart-empty" class="text-center text-body-secondary py-4">
@@ -167,13 +171,13 @@
         <table class="table table-sm table-striped align-middle">
           <thead class="table-dark">
             <tr>
-              <th>کالا</th>
-              <th>تعداد</th>
-              <th>قیمت DB</th>
-              <th>قیمت فروش</th>
-              <th>تخفیف</th>
-              <th>جمع</th>
-              <th></th>
+              <th scope="col">کالا</th>
+              <th scope="col">تعداد</th>
+              <th scope="col">قیمت DB</th>
+              <th scope="col">قیمت فروش</th>
+              <th scope="col">تخفیف</th>
+              <th scope="col">جمع</th>
+              <th scope="col"><span class="visually-hidden">عملیات</span></th>
             </tr>
           </thead>
           <tbody id="cart-tbody"></tbody>

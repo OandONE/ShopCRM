@@ -12,22 +12,22 @@
   <div class="card-body">
     <div class="row g-2 mb-2">
       <div class="col-md-3">
-        <label class="form-label small">از تاریخ (میلادی)</label>
+        <label class="form-label small" for="from-date">از تاریخ (میلادی)</label>
         <input type="date" id="from-date" class="form-control">
       </div>
       <div class="col-md-3">
-        <label class="form-label small">تا تاریخ (میلادی)</label>
+        <label class="form-label small" for="to-date">تا تاریخ (میلادی)</label>
         <input type="date" id="to-date" class="form-control">
       </div>
     </div>
 
     <div class="row g-2 align-items-end">
       <div class="col-md-3">
-        <label class="form-label small">فیلد</label>
+        <label class="form-label small" for="filter-column">فیلد</label>
         <select id="filter-column" class="form-select"></select>
       </div>
       <div class="col-md-2">
-        <label class="form-label small">عملگر</label>
+        <label class="form-label small" for="filter-op">عملگر</label>
         <select id="filter-op" class="form-select">
           <option value="=">مساوی</option>
           <option value="like">شامل</option>
@@ -38,11 +38,11 @@
         </select>
       </div>
       <div class="col-md-3">
-        <label class="form-label small">مقدار</label>
+        <label class="form-label small" for="filter-value">مقدار</label>
         <input type="text" id="filter-value" class="form-control" placeholder="مقدار...">
       </div>
       <div class="col-md-2">
-        <label class="form-label small">ترکیب</label>
+        <label class="form-label small" for="filter-logic">ترکیب</label>
         <select id="filter-logic" class="form-select">
           <option value="AND">AND</option>
           <option value="OR">OR</option>
@@ -56,7 +56,8 @@
       </div>
     </div>
 
-    <div id="active-filters" class="mt-2"></div>
+    <div class="keyboard-hint mt-2" role="note">F2 رفتن به مقدار فیلتر · Enter افزودن شرط · Ctrl+Enter اعمال فیلتر</div>
+    <div id="active-filters" class="mt-2" aria-live="polite"></div>
 
     <div class="d-flex gap-2 mt-3 flex-wrap">
       <button type="button" class="btn btn-primary" onclick="applyFilters()">

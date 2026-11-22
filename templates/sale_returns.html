@@ -18,7 +18,7 @@
     <div class="table-responsive">
       <table class="table table-sm table-striped align-middle">
         <thead class="table-dark">
-          <tr><th>کالا</th><th>خریداری‌شده</th><th>مرجوعی قبلی</th><th>باقی‌مانده</th><th>تعداد دریافتی</th><th>برگشت به انبار</th><th>مبلغ پیشنهادی</th><th>مبلغ نهایی (قابل ویرایش)</th></tr>
+          <tr><th scope="col">کالا</th><th scope="col">خریداری‌شده</th><th scope="col">مرجوعی قبلی</th><th scope="col">باقی‌مانده</th><th scope="col">تعداد دریافتی</th><th scope="col">برگشت به انبار</th><th scope="col">مبلغ پیشنهادی</th><th scope="col">مبلغ نهایی (قابل ویرایش)</th></tr>
         </thead>
         <tbody>
         {% for row in item_rows %}
@@ -38,13 +38,13 @@
             <td>{{ item.quantity }}</td>
             <td>{{ row.returned_qty }}</td>
             <td><span class="badge text-bg-secondary remaining-qty">{{ row.remaining_qty }}</span></td>
-            <td><input class="form-control form-control-sm return-qty" type="number" min="0" max="{{ row.remaining_qty }}" value="0" style="min-width:85px" {% if row.remaining_qty == 0 %}disabled{% endif %}></td>
+            <td><input class="form-control form-control-sm return-qty" type="number" min="0" max="{{ row.remaining_qty }}" value="0" aria-label="تعداد دریافتی برای {{ item.product_name }}" title="تعداد دریافتی برای {{ item.product_name }}" style="min-width:85px" {% if row.remaining_qty == 0 %}disabled{% endif %}></td>
             <td>
-              <input class="form-control form-control-sm restock-qty" type="number" min="0" max="0" value="0" style="min-width:85px" {% if not row.can_restock or row.remaining_qty == 0 %}disabled{% endif %}>
+              <input class="form-control form-control-sm restock-qty" type="number" min="0" max="0" value="0" aria-label="تعداد برگشت به انبار برای {{ item.product_name }}" title="تعداد برگشت به انبار برای {{ item.product_name }}" style="min-width:85px" {% if not row.can_restock or row.remaining_qty == 0 %}disabled{% endif %}>
               <small class="text-body-secondary">فقط سالم‌ها</small>
             </td>
             <td><span class="suggested-refund">—</span></td>
-            <td><input class="form-control form-control-sm refund-amount" type="number" min="0" value="0" style="min-width:130px" disabled></td>
+            <td><input class="form-control form-control-sm refund-amount" type="number" min="0" value="0" aria-label="مبلغ بازپرداخت برای {{ item.product_name }}" title="مبلغ بازپرداخت برای {{ item.product_name }}" style="min-width:130px" disabled></td>
           </tr>
         {% endfor %}
         </tbody>
@@ -52,7 +52,7 @@
     </div>
     <div class="row g-3 mt-1">
       <div class="col-md-8">
-        <label class="form-label">توضیح (اختیاری)</label>
+        <label class="form-label" for="return-note">توضیح (اختیاری)</label>
         <textarea id="return-note" class="form-control" rows="2" maxlength="1000" placeholder="مثلاً: دو عدد سالم، یک عدد خراب"></textarea>
       </div>
       <div class="col-md-4">
@@ -63,6 +63,7 @@
         </div>
       </div>
     </div>
+    <div class="keyboard-hint mt-2">F2 اولین فیلد تعداد · Tab حرکت بین تعدادها و مبلغ‌ها · Ctrl+Alt+Shift+Enter ثبت با تأیید نهایی</div>
     <div class="form-check mt-3">
       <input class="form-check-input" type="checkbox" id="seller-accepted">
       <label class="form-check-label" for="seller-accepted">من به‌عنوان فروشنده، این مرجوعی را پذیرفته‌ام و جزئیات آن را تأیید می‌کنم.</label>
@@ -176,6 +177,9 @@
       errorEl.classList.remove('d-none');
       return;
     }
+    const totalRefund = items.reduce((sum, item) => sum + item.refund_amount, 0);
+    const confirmText = `مرجوعی ${items.length} قلم با جمع بازپرداخت ${fmt(totalRefund)} تومان ثبت شود؟`;
+    if (!window.confirm(confirmText)) return;
     submit.disabled = true;
     const oldText = submit.innerHTML;
     submit.innerHTML = '<span class="spinner-border spinner-border-sm"></span> در حال ثبت...';

@@ -9,13 +9,21 @@
     <link href="/static/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
     <link href="/static/vendor/vazirmatn/Vazirmatn-font-face.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+      .skip-link{position:fixed;top:-100px;right:1rem;z-index:2000;padding:.7rem 1rem;background:#fff;color:#111;border:2px solid #0d6efd;border-radius:.5rem}
+      .skip-link:focus{top:1rem}
+      :focus-visible{outline:3px solid #0d6efd!important;outline-offset:2px}
+      .product-item[aria-selected="true"]{background:var(--bs-primary-bg-subtle);outline:2px solid var(--bs-primary);outline-offset:-2px}
+      .keyboard-hint{font-size:.8rem;color:var(--bs-secondary-color)}
+    </style>
     <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </head>
 <body class="bg-body-tertiary">
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
-  <div class="container">
+<a class="skip-link" href="#main-content">رفتن به محتوای اصلی</a>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm" aria-label="منوی اصلی">
+  <div class="container-fluid px-3">
     <a class="navbar-brand fw-bold" href="/">🛒 ShopCRM</a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="باز و بسته کردن منو">
       <span class="navbar-toggler-icon"></span>
     </button>
     <div class="collapse navbar-collapse" id="nav">
@@ -43,8 +51,9 @@
         {% endif %}
         {% if current_user and current_user.has_permission('view_sales') %}
         <li class="nav-item"><a class="nav-link" href="/sales"><i class="bi bi-receipt"></i> فروش‌ها</a></li>
+        <li class="nav-item"><a class="nav-link" href="/returns"><i class="bi bi-arrow-return-left"></i> مرجوعی‌ها</a></li>
         {% endif %}
-        {% if current_user and (current_user.has_permission('manage_columns') or current_user.has_permission('manage_products') or current_user.has_permission('view_current_columns')) %}
+        {% if current_user and (current_user.has_permission('manage_columns') or current_user.has_permission('manage_products') or current_user.has_permission('view_current_columns') or current_user.has_permission('view_sales')) %}
         <li class="nav-item"><a class="nav-link" href="/admin"><i class="bi bi-gear"></i> مدیریت</a></li>
         {% endif %}
         {% if current_user and current_user.is_owner() %}
@@ -62,6 +71,9 @@
             <li><a class="dropdown-item" href="/backup"><i class="bi bi-hdd"></i> بک‌آپ</a></li>
           </ul>
         </li>
+        {% endif %}
+        {% if current_user %}
+        <li class="nav-item"><a class="nav-link" href="/shortcuts"><i class="bi bi-keyboard"></i> راهنمای میانبرها</a></li>
         {% endif %}
       </ul>
       <ul class="navbar-nav mb-2 mb-lg-0">
@@ -88,7 +100,7 @@
   </div>
 </nav>
 
-<main class="container py-4">
+<main id="main-content" class="container-fluid py-4 px-3" tabindex="-1">
     {% if error %}
     <div class="alert alert-danger">{{ error }}</div>
     {% endif %}
@@ -129,6 +141,8 @@ document.querySelectorAll('[data-timestamp]').forEach(el => {
 });
 window.CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
 </script>
+<div id="shortcut-announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+<script src="/static/shortcuts.js" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
