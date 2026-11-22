@@ -230,7 +230,7 @@
   }
   function updateDiscountModeLabel() {
     if (discountLabel && discountModeField) {
-      discountLabel.textContent = discountModeField.value === 'line' ? 'تخفیف کل این ردیف (تومان)' : 'تخفیف هر واحد (تومان)';
+      discountLabel.textContent = discountModeField.value === 'line' ? 'تخفیف کل این ردیف' : 'تخفیف هر واحد';
     }
   }
   if (discountModeField) discountModeField.addEventListener('change', updateDiscountModeLabel);
