@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}جستجو - ShopCRM{% endblock %}
+{% block title %}جستجوی پیشرفته - ShopCRM{% endblock %}
 {% block content %}
 <h2 class="h3 mb-4"><i class="bi bi-search"></i> جستجوی پیشرفته</h2>
 
@@ -16,6 +16,7 @@
       <div class="col-md-2">
         <label class="form-label small">عملگر</label>
         <select id="filter-op" class="form-select">
+          <option value="IN" selected>IN (یکی از مقادیر)</option>
           <option value="=">مساوی</option>
           <option value="like">شامل</option>
           <option value=">">بزرگتر</option>
@@ -26,7 +27,8 @@
       </div>
       <div class="col-md-3">
         <label class="form-label small">مقدار</label>
-        <input type="text" id="filter-value" class="form-control" placeholder="مقدار...">
+        <input type="text" id="filter-value" class="form-control" placeholder="برای IN مقادیر را با ویرگول جدا کن...">
+        <div class="form-text">برای عملگر IN چند مقدار را با کاما یا ویرگول فارسی جدا کن؛ مثال: مداد، دفتر</div>
       </div>
       <div class="col-md-2">
         <label class="form-label small">ترکیب</label>
@@ -65,8 +67,13 @@ let filters = [];
 fetch('/api/columns')
   .then(r => r.json())
   .then(data => {
-    document.getElementById('filter-column').innerHTML =
-      data.map(c => `<option value="${c.id}">${c.name} (${c.type})</option>`).join('');
+    const select = document.getElementById('filter-column');
+    select.innerHTML = data.map(c => {
+      const scope = c.scope === 'item' ? 'قلم' : 'فاکتور';
+      return `<option value="${c.id}">${c.name} (${scope} - ${c.type})</option>`;
+    }).join('');
+    // Product name is the default field for advanced search.
+    select.value = 'item:product_name';
   })
   .catch(err => console.error('failed to load columns:', err));
 
@@ -96,7 +103,7 @@ function renderFilters() {
     return;
   }
   container.innerHTML = filters.map((f, i) => {
-    const opLabel = f.op === 'like' ? 'شامل' : f.op;
+    const opLabel = f.op === 'like' ? 'شامل' : (f.op === 'IN' ? 'یکی از' : f.op);
     const logic = i > 0 ? `<strong>${f.logic}</strong> ` : '';
     return `<span class="badge text-bg-primary me-1 mb-1 fs-6">
       ${logic}${f.colName} ${opLabel} "${f.value}"
@@ -128,10 +135,15 @@ function doSearch() {
       container.innerHTML = '<div class="alert alert-info">موردی یافت نشد.</div>';
       return;
     }
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[char]));
     const rows = data.map(sale => {
-      const info = Object.entries(sale.data)
-        .map(([k, v]) => `<strong>${k}:</strong> ${v}`)
+      const itemInfo = `<strong>کالاها:</strong> ${escapeHtml(sale.items_summary || '—')}`;
+      const customInfo = Object.entries(sale.data || {})
+        .map(([k, v]) => `<strong>${escapeHtml(k)}:</strong> ${escapeHtml(v)}`)
         .join('<br>');
+      const info = [itemInfo, customInfo].filter(Boolean).join('<br>');
       return `<tr>
         <td><span class="badge text-bg-secondary">#${sale.sale_id}</span></td>
         <td>${info}</td>

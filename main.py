@@ -218,24 +218,8 @@ def render(request: Request, name: str, status_code: int = 200, **ctx):
         **ctx,
     }, status_code=status_code)
 
-    additions = ["<style>@media print {.shopcrm-return-shortcut{display:none !important;}}</style>"]
+    additions = []
     path = request.url.path
-    if user and user.has_permission("view_sales"):
-        if re.fullmatch(r"/sales/\d+", path):
-            sid = path.rsplit("/", 1)[-1]
-            shortcut_url, shortcut_text = f"/sales/{sid}/returns", "مرجوعی همین فاکتور"
-        elif path == "/returns":
-            shortcut_url, shortcut_text = "/sales", "بازگشت به فهرست فروش‌ها"
-        elif path.startswith("/sales/") and path.endswith("/returns"):
-            shortcut_url, shortcut_text = "/returns", "فهرست همه مرجوعی‌ها"
-        else:
-            shortcut_url, shortcut_text = "/returns", "مرجوعی‌ها"
-        additions.append(
-            "<a href='{}' class='btn btn-primary btn-sm shopcrm-return-shortcut' "
-            "style='position:fixed;left:18px;bottom:18px;z-index:1080;border-radius:24px;" 
-            "box-shadow:0 3px 12px rgba(0,0,0,.22);padding:.55rem .9rem'>" 
-            "<i class='bi bi-arrow-return-left'></i> {}</a>".format(shortcut_url, shortcut_text)
-        )
 
     if path == "/sales":
         additions.append("""<script>
@@ -432,6 +416,35 @@ def _to_int(v):
         return None
 
 
+def _parse_in_values(value):
+    """Convert an IN filter value into a clean list of exact-match values"""
+    if isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        # Also accept a JSON array when a client sends one
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                decoded = json.loads(text)
+                if isinstance(decoded, list):
+                    raw_values = decoded
+                else:
+                    raw_values = [text]
+            except (json.JSONDecodeError, TypeError):
+                raw_values = re.split(r"[,،;\n\r]+", text)
+        else:
+            raw_values = re.split(r"[,،;\n\r]+", text)
+
+    cleaned = []
+    for item in raw_values:
+        item = str(item).strip().strip('\"\'')
+        if item and item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+
 # Auth routes
 
 @app.get("/login", response_class=HTMLResponse)
@@ -581,6 +594,11 @@ def full_form(request: Request, user: User = Depends(require_permission("full_sa
 @app.get("/search", response_class=HTMLResponse)
 def search_page(request: Request, user: User = Depends(require_permission("search"))):
     return render(request, "search.html")
+
+
+@app.get("/product-search", response_class=HTMLResponse)
+def product_search_page(request: Request, user: User = Depends(require_permission("search"))):
+    return render(request, "simple_search.html")
 
 
 # Admin page
@@ -1075,6 +1093,14 @@ def _query_sale_ids(body: dict) -> list[int]:
                         n = _to_int(val)
                         if n is not None:
                             vstmt = vstmt.where(field_obj == n)
+                elif op == "IN":
+                    values = _parse_in_values(f.get("value", ""))
+                    if field == "product_name":
+                        vstmt = vstmt.where(field_obj.in_(values))
+                    else:
+                        numeric_values = [_to_int(item) for item in values]
+                        numeric_values = [item for item in numeric_values if item is not None]
+                        vstmt = vstmt.where(field_obj.in_(numeric_values))
                 elif op == "like":
                     if field == "product_name":
                         vstmt = vstmt.where(field_obj.like(f"%{_escape_like(val)}%", escape="\\"))
@@ -1101,6 +1127,9 @@ def _query_sale_ids(body: dict) -> list[int]:
                 vstmt = select(SaleValue.sale_id).where(SaleValue.column_id == cid)
                 if op == "=":
                     vstmt = vstmt.where(SaleValue.value == val)
+                elif op == "IN":
+                    values = _parse_in_values(f.get("value", ""))
+                    vstmt = vstmt.where(SaleValue.value.in_(values))
                 elif op == "like":
                     vstmt = vstmt.where(SaleValue.value.like(f"%{_escape_like(val)}%", escape="\\"))
                 elif op in (">", "<", ">=", "<="):
@@ -1513,6 +1542,14 @@ async def search_advanced(request: Request, user: User = Depends(require_permiss
                         n = _to_int(val)
                         if n is not None:
                             vstmt = vstmt.where(field_obj == n)
+                elif op == "IN":
+                    values = _parse_in_values(f.get("value", ""))
+                    if field == "product_name":
+                        vstmt = vstmt.where(field_obj.in_(values))
+                    else:
+                        numeric_values = [_to_int(item) for item in values]
+                        numeric_values = [item for item in numeric_values if item is not None]
+                        vstmt = vstmt.where(field_obj.in_(numeric_values))
                 elif op == "like":
                     if field == "product_name":
                         vstmt = vstmt.where(field_obj.like(f"%{_escape_like(val)}%", escape="\\"))
@@ -1539,6 +1576,9 @@ async def search_advanced(request: Request, user: User = Depends(require_permiss
                 vstmt = select(SaleValue.sale_id).where(SaleValue.column_id == cid)
                 if op == "=":
                     vstmt = vstmt.where(SaleValue.value == val)
+                elif op == "IN":
+                    values = _parse_in_values(f.get("value", ""))
+                    vstmt = vstmt.where(SaleValue.value.in_(values))
                 elif op == "like":
                     vstmt = vstmt.where(SaleValue.value.like(f"%{_escape_like(val)}%", escape="\\"))
                 elif op in (">", "<", ">=", "<="):

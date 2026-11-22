@@ -67,3 +67,13 @@ body {
   border-color: #8a7500 !important;
   color: #fff !important;
 }
+
+
+/* Live product search */
+#product-search-results .table th,
+#product-search-results .table td {
+  vertical-align: middle;
+}
+#product-search-input {
+  min-width: 0;
+}

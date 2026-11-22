@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block title %}فروش‌ها - ShopCRM{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
   <h2 class="h3 mb-0"><i class="bi bi-receipt"></i> فاکتورها</h2>
+  <a href="/returns" class="btn btn-outline-primary">
+    <i class="bi bi-arrow-return-left"></i> مرجوعی‌ها
+  </a>
 </div>
 
 <div class="card shadow-sm mb-3">
@@ -94,6 +97,9 @@
                 <a href="/sales/{{ sale.id }}" class="badge text-bg-secondary text-decoration-none">
                   #{{ sale.id }}
                 </a>
+                <a href="/sales/{{ sale.id }}/returns" class="d-block small mt-1 text-decoration-none">
+                  <i class="bi bi-arrow-return-left"></i> مرجوعی
+                </a>
                 {% else %}
                 <span class="badge text-bg-light text-secondary">↳</span>
                 {% endif %}
@@ -131,7 +137,6 @@
 <script>
 let filters = [];
 let columnsCache = [];
-بنفش
 document.addEventListener('DOMContentLoaded', () => {
   fetch('/api/columns').then(r => r.json()).then(data => {
     columnsCache = data;
@@ -197,7 +202,10 @@ function applyFilters() {
       const dateStr = formatJalali(s.created_at);
       const fmt = n => n != null ? String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '—';
       return `<tr>
-        <td><a href="/sales/${s.sale_id}" class="badge text-bg-secondary text-decoration-none">#${s.sale_id}</a></td>
+        <td>
+          <a href="/sales/${s.sale_id}" class="badge text-bg-secondary text-decoration-none">#${s.sale_id}</a>
+          <a href="/sales/${s.sale_id}/returns" class="d-block small mt-1 text-decoration-none">مرجوعی</a>
+        </td>
         <td class="small">${dateStr}</td>
         <td colspan="5" class="text-body-secondary small">${s.items_summary}</td>
         <td><strong>${fmt(s.total_final)}</strong></td>

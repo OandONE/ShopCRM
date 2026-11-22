@@ -28,7 +28,15 @@
         <li class="nav-item"><a class="nav-link" href="/full"><i class="bi bi-pencil-square"></i> کامل</a></li>
         {% endif %}
         {% if current_user and current_user.has_permission('search') %}
-        <li class="nav-item"><a class="nav-link" href="/search"><i class="bi bi-search"></i> جستجو</a></li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+            <i class="bi bi-search"></i> جستجو
+          </a>
+          <ul class="dropdown-menu">
+            <li><a class="dropdown-item" href="/product-search"><i class="bi bi-search"></i> جستجوی کالا</a></li>
+            <li><a class="dropdown-item" href="/search"><i class="bi bi-sliders"></i> جستجوی پیشرفته</a></li>
+          </ul>
+        </li>
         {% endif %}
         {% if current_user and current_user.has_permission('view_reports') %}
         <li class="nav-item"><a class="nav-link" href="/reports"><i class="bi bi-graph-up"></i> گزارش</a></li>

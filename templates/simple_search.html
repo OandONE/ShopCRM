@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}جستجوی کالا - ShopCRM{% endblock %}
+{% block content %}
+<div class="mb-4">
+  <h2 class="h3 mb-2"><i class="bi bi-search"></i> جستجوی کالا</h2>
+  <p class="text-body-secondary mb-0">نام کالا را تایپ کن تا نتایج، قیمت فروش و موجودی به‌صورت زنده نمایش داده شوند.</p>
+</div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <label for="product-search-input" class="form-label">نام کالا</label>
+    <div class="input-group input-group-lg">
+      <span class="input-group-text"><i class="bi bi-search"></i></span>
+      <input id="product-search-input" type="search" class="form-control"
+             placeholder="مثلاً مداد یا دفتر..." autocomplete="off" autofocus>
+      <button id="product-search-clear" class="btn btn-outline-secondary" type="button" aria-label="پاک کردن جستجو">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="form-text">با وارد کردن حداقل یک حرف، جستجو به‌صورت خودکار انجام می‌شود.</div>
+  </div>
+</div>
+
+<div id="product-search-status" class="small text-body-secondary mb-2" role="status" aria-live="polite">
+  برای شروع، نام کالا را وارد کن.
+</div>
+<div id="product-search-results" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const input = document.getElementById('product-search-input');
+  const clearButton = document.getElementById('product-search-clear');
+  const status = document.getElementById('product-search-status');
+  const results = document.getElementById('product-search-results');
+  let debounceTimer = null;
+  let activeController = null;
+
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+  const formatNumber = value => Number(value || 0).toLocaleString('fa-IR');
+
+  function showMessage(message, kind = 'secondary') {
+    status.textContent = message;
+    results.innerHTML = '';
+    if (kind === 'danger') {
+      results.innerHTML = '<div class="alert alert-danger">در دریافت نتایج خطایی رخ داد. دوباره تلاش کن.</div>';
+    }
+  }
+
+  function renderProducts(products) {
+    if (!products.length) {
+      status.textContent = 'نتیجه‌ای برای این نام کالا پیدا نشد.';
+      results.innerHTML = '<div class="alert alert-info">کالای فعالی با این نام پیدا نشد.</div>';
+      return;
+    }
+    status.textContent = `${formatNumber(products.length)} کالا پیدا شد.`;
+    const rows = products.map(product => `
+      <tr>
+        <td class="fw-semibold">${escapeHtml(product.name)}</td>
+        <td class="text-nowrap">${formatNumber(product.price)} تومان</td>
+        <td class="text-nowrap">${formatNumber(product.stock_quantity)}</td>
+      </tr>
+    `).join('');
+    results.innerHTML = `
+      <div class="card shadow-sm">
+        <div class="table-responsive">
+          <table class="table table-striped table-hover align-middle mb-0">
+            <thead class="table-dark">
+              <tr><th>نام کالا</th><th>قیمت فروش</th><th>موجودی</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  async function searchProducts() {
+    const query = input.value.trim();
+    if (!query) {
+      if (activeController) activeController.abort();
+      showMessage('برای شروع، نام کالا را وارد کن.');
+      return;
+    }
+    if (activeController) activeController.abort();
+    activeController = new AbortController();
+    status.textContent = 'در حال جستجو...';
+    results.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>';
+
+    try {
+      const response = await fetch(`/api/search-products?q=${encodeURIComponent(query)}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: activeController.signal
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const products = await response.json();
+      // Ignore results if the user has already changed the search text.
+      if (input.value.trim() !== query) return;
+      renderProducts(products);
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      console.error('product search failed:', error);
+      showMessage('خطا در جستجوی کالا', 'danger');
+    }
+  }
+
+  input.addEventListener('input', () => {
+    window.clearTimeout(debounceTimer);
+    debounceTimer = window.setTimeout(searchProducts, 220);
+  });
+  clearButton.addEventListener('click', () => {
+    input.value = '';
+    input.focus();
+    if (activeController) activeController.abort();
+    showMessage('برای شروع، نام کالا را وارد کن.');
+  });
+})();
+</script>
+{% endblock %}
