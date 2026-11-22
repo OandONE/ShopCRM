@@ -28,6 +28,60 @@
 
 ---
 
+## 🖼️ اسکرین شات ها
+
+### داشبورد
+صفحه اصلی و دسترسی سریع به بخش‌های مختلف برنامه.
+
+![Dashboard](screenshots/dashboard.png)
+
+### مدیریت فاکتور ها
+مشاهده فاکتورها، فیلتر فروش‌ها و دسترسی به جزئیات هر فاکتور.
+
+![Sales](screenshots/sales.png)
+
+### فروش سریع
+ثبت سریع فاکتور با حداقل اطلاعات موردنیاز.
+
+![Quick Sale](screenshots/quick-1.png)
+![Quick Sale Details](screenshots/quick-2.png)
+
+### فروش کامل
+ثبت فاکتور با جزئیات کامل و امکان افزودن چند کالا.
+
+![Full Sale](screenshots/full-1.png)
+![Full Sale Details](screenshots/full-2.png)
+
+### جستجو کالا
+جستجوی سریع محصولات همراه با نمایش قیمت و موجودی.
+
+![Product Search](screenshots/simple-search.png)
+
+### گزارش
+گزارش‌ها و نمودارهای آماری فروش.
+
+![Reports](screenshots/reports.png)
+
+### مرجوعی
+مدیریت مرجوعی فاکتورها و ثبت مرجوعی کالا.
+
+![Returns](screenshots/returns.png)
+![Return Details](screenshots/return.png)
+
+### پنل مدیریت
+مدیریت محصولات، ستون‌های سفارشی و تنظیمات برنامه.
+
+![Management](screenshots/manager-1.png)
+![Management](screenshots/manager-2.png)
+![Management](screenshots/manager-3.png)
+
+### پنل مالک
+مدیریت کاربران، دسترسی‌ها و تنظیمات مالک.
+
+![Owner Panel](screenshots/owner_panel.png)
+
+---
+
 ## 🚀 نصب و اجرا
 
 ### پیش‌نیازها
