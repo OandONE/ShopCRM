@@ -9,8 +9,9 @@ from models import (
     User, UserSession, StoreSettings, AuditLog,
     Column, Product, ProductPriceHistory, InventoryMovement,
     Sale, SaleValue, SaleItem, SaleItemValue, DeletedSale,
-    SaleReturn, SaleReturnItem,
+    SaleReturn, SaleReturnItem, SavedAnalysis,
 )
+from shopcrm_analytics import build_analytics_router
 from rate_limit import RateLimiter
 from audit import write_audit
 from contextlib import asynccontextmanager
@@ -344,6 +345,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Advanced analytics: a separate subsystem keeps query construction and UI
+# logic out of the main application module
+app.include_router(build_analytics_router(
+    engine=engine,
+    render=render,
+    require_permission=require_permission,
+    verify_csrf_header=verify_csrf_header,
+))
 
 
 # Persian numbers

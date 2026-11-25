@@ -212,3 +212,13 @@ class SaleReturnItem(SQLModel, table=True):
     suggested_refund_amount: int = 0
     refund_amount: int = 0
 
+
+
+# User-saved analytics configurations (aggregated results are recomputed on run)
+class SavedAnalysis(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    name: str = Field(max_length=80)
+    config_json: str
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    updated_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}تحلیل پیشرفته - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+  <div>
+    <h2 class="h3 mb-1"><i class="bi bi-bar-chart-line"></i> تحلیل پیشرفته</h2>
+    <div class="text-body-secondary small">ساخت تحلیل سفارشی، مقایسهٔ بازه‌ها و دریافت دادهٔ ساختاریافته</div>
+  </div>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <select class="form-select" id="saved-analysis-select" aria-label="تحلیل‌های ذخیره‌شده" style="min-width:210px">
+      <option value="">تحلیل ذخیره‌شده...</option>
+    </select>
+    <button class="btn btn-outline-secondary" id="delete-saved-btn" type="button" disabled title="حذف تحلیل ذخیره‌شده"><i class="bi bi-trash"></i></button>
+    <button class="btn btn-outline-primary" id="save-analysis-btn" type="button"><i class="bi bi-bookmark-plus"></i> ذخیرهٔ تحلیل</button>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <strong><i class="bi bi-sliders"></i> تنظیمات تحلیل</strong>
+    <div class="dropdown">
+      <button class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" type="button"><i class="bi bi-magic"></i> تحلیل‌های آماده</button>
+      <ul class="dropdown-menu dropdown-menu-end" id="preset-menu">
+        <li><button class="dropdown-item" data-preset="sales_month" type="button">فروش ماهانه</button></li>
+        <li><button class="dropdown-item" data-preset="sales_day" type="button">تعداد فاکتور در هر روز</button></li>
+        <li><button class="dropdown-item" data-preset="top_products" type="button">پرفروش‌ترین کالاها</button></li>
+        <li><button class="dropdown-item" data-preset="gender" type="button">توزیع جنسیت خریداران</button></li>
+        <li><button class="dropdown-item" data-preset="age" type="button">توزیع سن خریداران</button></li>
+        <li><button class="dropdown-item" data-preset="refunds" type="button">مبلغ مرجوعی ماهانه</button></li>
+      </ul>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="dataset">نوع داده</label>
+        <select class="form-select" id="dataset">
+          <option value="sales">فاکتورها</option>
+          <option value="items">اقلام فاکتورها</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="metric">معیار محاسبه</label>
+        <select class="form-select" id="metric"></select>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="group-by">گروه‌بندی بر اساس</label>
+        <select class="form-select" id="group-by">
+          <option value="month">ماه</option>
+          <option value="day">روز</option>
+          <option value="week">هفته</option>
+          <option value="quarter">فصل</option>
+          <option value="year">سال</option>
+          <option value="none">بدون گروه‌بندی</option>
+          <option value="seller">ثبت‌کنندهٔ فاکتور</option>
+          <option value="gender">جنسیت خریدار</option>
+          <option value="age">سن خریدار</option>
+          <option value="product_name" data-items-only="1">نام کالا</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="chart-type">نوع نمودار</label>
+        <select class="form-select" id="chart-type">
+          <option value="bar">میله‌ای</option>
+          <option value="line">خطی</option>
+          <option value="pie">دایره‌ای</option>
+          <option value="doughnut">حلقه‌ای</option>
+          <option value="polarArea">قطبی</option>
+          <option value="radar">راداری</option>
+          <option value="scatter">پراکندگی</option>
+          <option value="bubble">حبابی</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="date-from">از تاریخ</label>
+        <input class="form-control" type="date" id="date-from" required>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="date-to">تا تاریخ</label>
+        <input class="form-control" type="date" id="date-to" required>
+      </div>
+      <div class="col-sm-6 col-lg-3 d-flex align-items-end">
+        <div class="form-check form-switch mb-2">
+          <input class="form-check-input" type="checkbox" id="compare-enabled" role="switch">
+          <label class="form-check-label" for="compare-enabled">مقایسه با بازهٔ دیگر</label>
+        </div>
+      </div>
+    </div>
+
+    <div id="compare-fields" class="row g-3 border-top mt-3 pt-3" hidden>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="compare-from">شروع بازهٔ مقایسه</label>
+        <input class="form-control" type="date" id="compare-from">
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label" for="compare-to">پایان بازهٔ مقایسه</label>
+        <input class="form-control" type="date" id="compare-to">
+      </div>
+      <div class="col-lg-6 d-flex align-items-end">
+        <div class="small text-body-secondary mb-2">هر دو بازه از فیلترها و معیار یکسانی استفاده می‌کنند؛ فقط تاریخ‌ها متفاوت‌اند.</div>
+      </div>
+    </div>
+
+    <div class="border-top mt-4 pt-3">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+        <div>
+          <strong>فیلترهای پیشرفته</strong>
+          <div class="small text-body-secondary">گروه‌های تو در تو با منطق AND / OR و امکان معکوس‌کردن گروه</div>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" id="clear-filters" type="button"><i class="bi bi-eraser"></i> پاک‌کردن شرط‌ها</button>
+      </div>
+      <div id="filter-root" class="analytics-filter-root"></div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mt-4">
+      <button class="btn btn-primary" id="run-analysis-btn" type="button"><i class="bi bi-play-fill"></i> اجرای تحلیل</button>
+      <button class="btn btn-outline-success" id="export-json-btn" type="button" disabled><i class="bi bi-filetype-json"></i> دریافت JSON</button>
+      <span class="small text-body-secondary align-self-center" id="analysis-status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+</div>
+
+<div id="analysis-results" hidden>
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100"><div class="card-body">
+        <div class="small text-body-secondary" id="current-period-label">مجموع بازه</div>
+        <div class="display-6 fw-bold" id="current-total">—</div>
+        <div class="small text-body-secondary" id="metric-label"></div>
+      </div></div>
+    </div>
+    <div class="col-md-4" id="compare-kpi-card" hidden>
+      <div class="card shadow-sm h-100"><div class="card-body">
+        <div class="small text-body-secondary" id="compare-period-label">بازهٔ مقایسه</div>
+        <div class="display-6 fw-bold" id="compare-total">—</div>
+        <div class="small" id="compare-change"></div>
+      </div></div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100"><div class="card-body">
+        <div class="small text-body-secondary">تعداد گروه‌های نمایش‌داده‌شده</div>
+        <div class="display-6 fw-bold" id="group-count">—</div>
+        <div class="small text-body-secondary">جمع کل بر مبنای تمام داده‌های منطبق محاسبه می‌شود.</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div id="analysis-warnings" class="mb-3"></div>
+  <div class="card shadow-sm mb-3">
+    <div class="card-header"><strong>نمودار تحلیل</strong></div>
+    <div class="card-body"><div class="analytics-chart-wrap"><canvas id="analysis-chart" aria-label="نمودار نتیجهٔ تحلیل" role="img"></canvas></div></div>
+  </div>
+  <div class="card shadow-sm">
+    <div class="card-header"><strong>داده‌های تحلیل</strong></div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead><tr><th>گروه</th><th>مقدار بازهٔ فعلی</th><th id="compare-table-heading" hidden>مقدار بازهٔ مقایسه</th></tr></thead>
+        <tbody id="analysis-table-body"><tr><td colspan="3" class="text-center text-body-secondary py-4">هنوز تحلیلی اجرا نشده است.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="small text-body-secondary mt-2" id="analysis-meta"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+<script src="/static/analytics.js" defer></script>
+{% endblock %}

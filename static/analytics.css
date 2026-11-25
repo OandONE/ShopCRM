@@ -1,0 +1,25 @@
+.analytics-filter-root { min-height: 3rem; }
+.analytics-filter-group {
+  border: 1px solid var(--bs-border-color);
+  border-right: 3px solid var(--bs-primary);
+  border-radius: .65rem;
+  padding: .8rem;
+  margin-top: .65rem;
+  background: var(--bs-tertiary-bg);
+}
+.analytics-filter-group.is-nested { margin-right: 1rem; }
+.analytics-filter-group-head,
+.analytics-filter-rule { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.analytics-filter-rule { padding: .45rem; border: 1px solid var(--bs-border-color); border-radius: .5rem; background: var(--bs-body-bg); margin-top: .5rem; }
+.analytics-filter-rule .field-select { flex: 1 1 220px; min-width: 170px; }
+.analytics-filter-rule .op-select { flex: 0 1 150px; min-width: 130px; }
+.analytics-filter-rule .value-wrap { flex: 1 1 180px; min-width: 140px; display: flex; gap: .35rem; }
+.analytics-filter-rule .value-wrap input { min-width: 0; }
+.analytics-filter-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .65rem; }
+.analytics-chart-wrap { min-height: 320px; position: relative; }
+.analytics-chart-wrap canvas { max-height: 440px; }
+#analysis-table-body td, #analysis-table-body th { white-space: nowrap; }
+@media (max-width: 576px) {
+  .analytics-filter-group.is-nested { margin-right: .45rem; }
+  .analytics-chart-wrap { min-height: 250px; }
+}

@@ -9,6 +9,7 @@
     <link href="/static/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
     <link href="/static/vendor/vazirmatn/Vazirmatn-font-face.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/analytics.css">
     <style>
       .skip-link{position:fixed;top:-100px;right:1rem;z-index:2000;padding:.7rem 1rem;background:#fff;color:#111;border:2px solid #0d6efd;border-radius:.5rem}
       .skip-link:focus{top:1rem}
@@ -48,6 +49,7 @@
         {% endif %}
         {% if current_user and current_user.has_permission('view_reports') %}
         <li class="nav-item"><a class="nav-link" href="/reports"><i class="bi bi-graph-up"></i> گزارش</a></li>
+        <li class="nav-item"><a class="nav-link" href="/analytics"><i class="bi bi-bar-chart-line"></i> تحلیل پیشرفته</a></li>
         {% endif %}
         {% if current_user and current_user.has_permission('view_sales') %}
         <li class="nav-item"><a class="nav-link" href="/sales"><i class="bi bi-receipt"></i> فروش‌ها</a></li>
