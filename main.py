@@ -18,14 +18,159 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3, re
 from html import escape as html_escape
+from pathlib import Path
+from sqlalchemy.engine import URL
 
 
-engine = create_engine("sqlite:///database.db", connect_args={"check_same_thread": False})
-templates = Jinja2Templates(directory="templates")
+# Configuration
 
-SESSION_COOKIE = "shopcrm_session"
-SESSION_DAYS = 7
-login_limiter = RateLimiter(max_attempts=5, window_minutes=15, cleanup_minutes=30)
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = BASE_DIR / "config.json"
+
+
+DEFAULT_CONFIG = {
+    "app": {
+        "title": "ShopCRM"
+    },
+
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8080,
+        "reload": False,
+        "log_level": "info"
+    },
+
+    "database": {
+        "path": "database.db",
+        "timeout_seconds": 30
+    },
+
+    "paths": {
+        "templates": "templates",
+        "static": "static"
+    },
+
+    "session": {
+        "cookie_name": "shopcrm_session",
+        "days": 7,
+        "secure": False,
+        "samesite": "lax"
+    },
+
+    "login_rate_limit": {
+        "max_attempts": 5,
+        "window_minutes": 15,
+        "cleanup_minutes": 30
+    },
+
+    "cors": {
+        "allow_origins": []
+    }
+}
+
+
+def _merge_config(defaults: dict, custom: dict) -> dict:
+    """Merge user configuration with defaults recursively"""
+    result = defaults.copy()
+
+    for key, value in custom.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            result[key] = _merge_config(result[key], value)
+        else:
+            result[key] = value
+
+    return result
+
+
+def _load_config() -> dict:
+    """Load configuration file or use defaults"""
+
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as file:
+            custom_config = json.load(file)
+
+    except FileNotFoundError:
+        custom_config = {}
+
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Invalid configuration file: {CONFIG_PATH}"
+        ) from exc
+
+    if not isinstance(custom_config, dict):
+        raise RuntimeError("Configuration must be a JSON object.")
+
+    return _merge_config(DEFAULT_CONFIG, custom_config)
+
+
+CONFIG = _load_config()
+
+
+def _resolve_path(path: str) -> Path:
+    """Resolve relative paths from the project directory"""
+    path = Path(path).expanduser()
+
+    if not path.is_absolute():
+        path = BASE_DIR / path
+
+    return path.resolve()
+
+
+# Server
+SERVER_HOST = str(CONFIG["server"]["host"])
+SERVER_PORT = int(CONFIG["server"]["port"])
+SERVER_RELOAD = bool(CONFIG["server"]["reload"])
+SERVER_LOG_LEVEL = str(CONFIG["server"]["log_level"])
+
+
+# Database
+DATABASE_PATH = _resolve_path(CONFIG["database"]["path"])
+DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+engine = create_engine(
+    URL.create(
+        "sqlite",
+        database=str(DATABASE_PATH)
+    ),
+    connect_args={
+        "check_same_thread": False,
+        "timeout": float(CONFIG["database"]["timeout_seconds"])
+    }
+)
+
+
+# Directories
+TEMPLATES_DIR = _resolve_path(CONFIG["paths"]["templates"])
+STATIC_DIR = _resolve_path(CONFIG["paths"]["static"])
+
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+# Session
+SESSION_COOKIE = str(CONFIG["session"]["cookie_name"])
+SESSION_DAYS = int(CONFIG["session"]["days"])
+
+SESSION_COOKIE_SECURE = bool(CONFIG["session"]["secure"])
+SESSION_COOKIE_SAMESITE = str(CONFIG["session"]["samesite"])
+
+
+# Login rate limit
+login_limiter = RateLimiter(
+    max_attempts=int(CONFIG["login_rate_limit"]["max_attempts"]),
+    window_minutes=int(CONFIG["login_rate_limit"]["window_minutes"]),
+    cleanup_minutes=int(CONFIG["login_rate_limit"]["cleanup_minutes"])
+)
+
+
+# CORS
+CORS_ORIGINS = CONFIG["cors"]["allow_origins"] or [
+    f"http://127.0.0.1:{SERVER_PORT}",
+    f"http://localhost:{SERVER_PORT}"
+]
 
 ITEM_FIELDS = {"product_name", "db_unit_price", "manual_unit_price", "discount_per_unit", "discount_total", "quantity"}
 
@@ -337,11 +482,20 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app = FastAPI(
+    title=CONFIG["app"]["title"],
+    lifespan=lifespan
+)
+
+app.mount(
+    "/static",
+    StaticFiles(directory=str(STATIC_DIR)),
+    name="static"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -509,9 +663,14 @@ async def login(request: Request, next: str = ""):
         login_limiter.reset(ip)
         write_audit(engine, request, "user.login", user=authed_user)
         resp = RedirectResponse(_safe_next(next), status_code=303)
-        resp.set_cookie(SESSION_COOKIE, session_token,
-                        httponly=True, samesite="lax",
-                        max_age=SESSION_DAYS * 24 * 3600)
+        resp.set_cookie(
+            SESSION_COOKIE,
+            session_token,
+            httponly=True,
+            secure=SESSION_COOKIE_SECURE,
+            samesite=SESSION_COOKIE_SAMESITE,
+            max_age=SESSION_DAYS * 24 * 3600
+        )
         return resp
 
     login_limiter.record(ip)
@@ -2264,7 +2423,7 @@ def backup_page(request: Request, user: User = Depends(require_owner)):
 @app.get("/api/backup/download")
 def download_backup(request: Request, user: User = Depends(require_owner)):
     write_audit(engine, request, "backup.download", user=user)
-    return FileResponse("database.db", filename="backup.db")
+    return FileResponse(str(DATABASE_PATH), filename="backup.db")
 
 
 @app.post("/api/backup/restore")
@@ -2278,11 +2437,13 @@ async def restore_backup(request: Request, user: User = Depends(require_owner)):
     if not content:
         raise HTTPException(400, "فایل خالی است")
 
-    tmp = "database.restore.tmp"
+    tmp = DATABASE_PATH.with_name(
+        DATABASE_PATH.name + ".restore.tmp"
+    )
     with open(tmp, "wb") as f:
         f.write(content)
     try:
-        conn = sqlite3.connect(tmp)
+        conn = sqlite3.connect(str(tmp))
         conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         conn.close()
     except sqlite3.DatabaseError:
@@ -2292,7 +2453,7 @@ async def restore_backup(request: Request, user: User = Depends(require_owner)):
     write_audit(engine, request, "backup.restore", user=user)
 
     engine.dispose()
-    os.replace(tmp, "database.db")
+    os.replace(tmp, DATABASE_PATH)
     engine.dispose()
     SQLModel.metadata.create_all(engine)
 
@@ -2302,4 +2463,10 @@ async def restore_backup(request: Request, user: User = Depends(require_owner)):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(
+        "main:app" if SERVER_RELOAD else app,
+        host=SERVER_HOST,
+        port=SERVER_PORT,
+        reload=SERVER_RELOAD,
+        log_level=SERVER_LOG_LEVEL
+    )
