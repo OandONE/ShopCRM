@@ -112,7 +112,6 @@ ShopCRM برای فروشگاه‌های کوچک و محلی طراحی شده 
 ### پنل مالک
 مدیریت کاربران، دسترسی‌ها و تنظیمات مالک.
 
-![Owner Panel](screenshots/owner_panel.png)
 ![Owner Panel](screenshots/owner-panel.png)
 
 ### تنظیمات فروشگاه
