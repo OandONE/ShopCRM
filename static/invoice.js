@@ -398,6 +398,10 @@
   const invoiceDiscountError = document.getElementById('invoice-discount-error');
 
   const customerSelect = document.getElementById('invoice-customer-id');
+  const customerSearchInput = document.getElementById('invoice-customer-search');
+  const customerPicker = document.getElementById('invoice-customer-picker');
+  const customerOptionsEl = document.getElementById('invoice-customer-options');
+  const customerClearBtn = document.getElementById('invoice-customer-clear');
   const paymentMethodSelect = document.getElementById('invoice-payment-method');
   const cashPartWrap = document.getElementById('invoice-cash-part-wrap');
   const cashPartInput = document.getElementById('invoice-cash-part');
@@ -407,24 +411,194 @@
   const walletWarningEl = document.getElementById('invoice-wallet-warning');
   const paymentErrorEl = document.getElementById('invoice-payment-error');
   let customersById = new Map();
+  let invoiceCustomers = [];
+  let suppressCustomerFocusOpen = false;
   let paymentValues = {cash: 0, wallet: 0, balanceAfter: 0};
   let mixedCashTouched = false;
+
+  function normalizeCustomerSearch(value) {
+    const digitMap = {
+      '۰':'0', '۱':'1', '۲':'2', '۳':'3', '۴':'4',
+      '۵':'5', '۶':'6', '۷':'7', '۸':'8', '۹':'9',
+      '٠':'0', '١':'1', '٢':'2', '٣':'3', '٤':'4',
+      '٥':'5', '٦':'6', '٧':'7', '٨':'8', '٩':'9'
+    };
+    return String(value || '').normalize('NFKC').toLocaleLowerCase('fa')
+      .replace(/[۰-۹٠-٩]/g, digit => digitMap[digit])
+      .replace(/[\s\u200c\u200e\u200f\u202a-\u202e]/g, '');
+  }
+
+  function customerDescription(customer) {
+    const raw = String(customer.notes || '').trim();
+    if (!raw) return 'برای این مشتری توضیحی ثبت نشده است.';
+    return Array.from(raw).slice(0, 200).join('');
+  }
+
+  function hideCustomerOptions() {
+    customerOptionsEl?.classList.add('d-none');
+    customerSearchInput?.setAttribute('aria-expanded', 'false');
+  }
+
+  function showCustomerOptions() {
+    if (!customerOptionsEl) return;
+    customerOptionsEl.classList.remove('d-none');
+    customerSearchInput?.setAttribute('aria-expanded', 'true');
+  }
+
+  function renderCustomerOptions(query = '') {
+    if (!customerOptionsEl) return;
+
+    // Remove Bootstrap tooltip instances before replacing their trigger elements.
+    customerOptionsEl.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+      window.bootstrap?.Tooltip.getInstance(el)?.dispose();
+    });
+
+    const normalizedQuery = normalizeCustomerSearch(query);
+    const matches = normalizedQuery
+      ? invoiceCustomers.filter(customer =>
+          normalizeCustomerSearch(customer.full_name).includes(normalizedQuery) ||
+          normalizeCustomerSearch(customer.phone).includes(normalizedQuery))
+      : invoiceCustomers;
+    const visibleCustomers = matches.slice(0, 60);
+
+    if (!visibleCustomers.length) {
+      customerOptionsEl.innerHTML = '<div class="customer-picker-hint">مشتری‌ای با این نام یا شماره پیدا نشد.</div>';
+      return;
+    }
+
+    const hint = matches.length > 60
+      ? `<div class="customer-picker-hint">${normalizedQuery ? 'بیش از ۶۰ نتیجه پیدا شد؛ برای دقیق‌تر شدن جستجو، چند حرف یا رقم دیگر وارد کنید.' : 'برای پیدا کردن سریع‌تر، نام یا شماره موبایل را جستجو کنید.'} ۶۰ نتیجه اول نمایش داده شده‌اند.</div>`
+      : '';
+
+    customerOptionsEl.innerHTML = hint + visibleCustomers.map(customer => {
+      const name = escapeHtml(customer.full_name || 'بدون نام');
+      const phone = escapeHtml(customer.phone || 'شماره ثبت نشده');
+      const description = escapeHtml(customerDescription(customer));
+      const balance = Number(customer.balance || 0);
+      const balanceLabel = balance < 0
+        ? `بدهی: ${formatToman(Math.abs(balance))}`
+        : `موجودی: ${formatToman(balance)}`;
+      return `<button type="button" class="dropdown-item customer-picker-option d-flex justify-content-between align-items-center gap-2 py-2"
+                      role="option" aria-selected="false" data-customer-id="${customer.id}"
+                      data-bs-toggle="tooltip" data-bs-placement="left" data-bs-title="${description}">
+                <span class="d-flex flex-column text-truncate">
+                  <span class="fw-semibold text-truncate">${name}</span>
+                  <span class="small text-body-secondary">${phone}</span>
+                </span>
+                <span class="small text-body-secondary text-nowrap">${escapeHtml(balanceLabel)}</span>
+              </button>`;
+    }).join('');
+
+    customerOptionsEl.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+      if (window.bootstrap?.Tooltip) {
+        window.bootstrap.Tooltip.getOrCreateInstance(el, {
+          container: 'body', trigger: 'hover focus', placement: 'auto'
+        });
+      }
+    });
+
+    customerOptionsEl.querySelectorAll('[data-customer-id]').forEach((button, index, buttons) => {
+      button.addEventListener('click', () => {
+        const customer = customersById.get(String(button.dataset.customerId));
+        if (!customer) return;
+        customerSelect.value = String(customer.id);
+        customerSearchInput.value = `${customer.full_name}${customer.phone ? ' · ' + customer.phone : ''}`;
+        customerClearBtn?.classList.remove('d-none');
+        hideCustomerOptions();
+        suppressCustomerFocusOpen = true;
+        customerSearchInput?.focus();
+        customerSelect.dispatchEvent(new Event('change', {bubbles: true}));
+      });
+      button.addEventListener('keydown', event => {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          buttons[Math.min(index + 1, buttons.length - 1)]?.focus();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          if (index === 0) customerSearchInput?.focus();
+          else buttons[index - 1]?.focus();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          hideCustomerOptions();
+          customerSearchInput?.focus();
+        }
+      });
+    });
+  }
+
+  function clearInvoiceCustomer() {
+    if (!customerSelect) return;
+    customerSelect.value = '';
+    if (customerSearchInput) customerSearchInput.value = '';
+    customerClearBtn?.classList.add('d-none');
+    hideCustomerOptions();
+    suppressCustomerFocusOpen = true;
+    customerSearchInput?.focus();
+    customerSelect.dispatchEvent(new Event('change', {bubbles: true}));
+  }
 
   async function loadInvoiceCustomers() {
     if (!customerSelect) return;
     try {
       const response = await fetch('/api/customers/options');
       if (!response.ok) throw new Error('بارگذاری مشتری‌ها ناموفق بود');
-      const customers = await response.json();
-      customersById = new Map(customers.map(c => [String(c.id), c]));
-      customerSelect.innerHTML = '<option value="">بدون اتصال به مشتری</option>' + customers.map(c =>
-        `<option value="${c.id}">${escapeHtml(c.full_name)}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}</option>`
-      ).join('');
+      invoiceCustomers = await response.json();
+      customersById = new Map(invoiceCustomers.map(customer => [String(customer.id), customer]));
+      renderCustomerOptions('');
       updatePaymentUI();
     } catch (err) {
       if (customerBalanceEl) customerBalanceEl.textContent = 'بارگذاری فهرست مشتری‌ها انجام نشد؛ فاکتور نقدی همچنان قابل ثبت است.';
     }
   }
+
+  customerSearchInput?.addEventListener('focus', () => {
+    if (suppressCustomerFocusOpen) {
+      suppressCustomerFocusOpen = false;
+      return;
+    }
+    // When a customer is already selected, select its display text so typing replaces it.
+    if (customerSelect?.value) {
+      customerSearchInput.select();
+      renderCustomerOptions('');
+    } else {
+      renderCustomerOptions(customerSearchInput.value);
+    }
+    showCustomerOptions();
+  });
+  customerSearchInput?.addEventListener('click', () => {
+    if (customerSelect?.value) {
+      customerSearchInput.select();
+      renderCustomerOptions('');
+      showCustomerOptions();
+    }
+  });
+  customerSearchInput?.addEventListener('input', () => {
+    if (customerSelect?.value) {
+      customerSelect.value = '';
+      customerClearBtn?.classList.add('d-none');
+      customerSelect.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+    renderCustomerOptions(customerSearchInput.value);
+    showCustomerOptions();
+  });
+  customerSearchInput?.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' && customerOptionsEl && !customerOptionsEl.classList.contains('d-none')) {
+      event.preventDefault();
+      customerOptionsEl.querySelector('[data-customer-id]')?.focus();
+    } else if (event.key === 'Escape') {
+      hideCustomerOptions();
+    } else if (event.key === 'Enter' && customerOptionsEl && !customerOptionsEl.classList.contains('d-none')) {
+      const firstOption = customerOptionsEl.querySelector('[data-customer-id]');
+      if (firstOption) {
+        event.preventDefault();
+        firstOption.click();
+      }
+    }
+  });
+  customerClearBtn?.addEventListener('click', clearInvoiceCustomer);
+  document.addEventListener('pointerdown', event => {
+    if (customerPicker && !customerPicker.contains(event.target)) hideCustomerOptions();
+  });
 
   function getPayableNow() {
     const subtotal = cart.reduce((sum, it) => sum + Math.max(0, Number(it.final_unit_price || 0) * Number(it.quantity || 0) - Number(it.discount_total || 0)), 0);

@@ -827,9 +827,15 @@ def customer_detail_page(customer_id: int, request: Request, user: User = Depend
 def customer_options(user: User = Depends(require_user)):
     with Session(engine) as s:
         customers = s.exec(select(Customer).where(Customer.is_active == True)
-                            .order_by(Customer.full_name).limit(1000)).all()
+                            .order_by(Customer.full_name)).all()
+        balance_rows = s.exec(
+            select(WalletTransaction.customer_id,
+                   func.coalesce(func.sum(WalletTransaction.amount), 0))
+            .group_by(WalletTransaction.customer_id)
+        ).all()
+        balances = {customer_id: int(balance or 0) for customer_id, balance in balance_rows}
         return [{"id": c.id, "full_name": c.full_name, "phone": c.phone or "",
-                 "balance": _wallet_balance(s, c.id)} for c in customers]
+                 "notes": c.notes or "", "balance": balances.get(c.id, 0)} for c in customers]
 
 
 @app.post("/api/customers/create")
