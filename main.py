@@ -4,18 +4,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Session, create_engine, select, func
-from sqlalchemy import Float, cast, desc, update as sa_update
+from sqlalchemy import Float, cast, desc, update as sa_update, and_, or_, exists
 from models import (
     User, UserSession, StoreSettings, AuditLog,
+    BulkPriceUpdateOperation, BulkPriceUpdateItem,
     Column, Product, Category, ProductCategoryLink, ProductPriceHistory, InventoryMovement,
     Sale, SaleValue, SaleItem, SaleItemValue, DeletedSale,
-    SaleReturn, SaleReturnItem, SavedAnalysis, Customer, WalletTransaction,
+    SaleReturn, SaleReturnItem, Customer, WalletTransaction,
 )
 from shopcrm_analytics import build_analytics_router
 from rate_limit import RateLimiter
 from audit import write_audit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3, re, unicodedata
 from html import escape as html_escape
 from pathlib import Path
@@ -617,7 +619,7 @@ def _normalize_product_search(value: str) -> str:
 
 
 def _persian_product_sort_key(value: str) -> tuple[int, ...]:
-    """Return a stable Persian-alphabet sort key (with other chars after Persian)"""
+    """Return a stable Persian-alphabet sort key (with other chars after Persian)."""
     normalized = _normalize_product_search(value)
     return tuple(
         _PERSIAN_SORT_ORDER[char] if char in _PERSIAN_SORT_ORDER else 1000 + ord(char)
@@ -626,7 +628,7 @@ def _persian_product_sort_key(value: str) -> tuple[int, ...]:
 
 
 def _normalized_product_name_sql():
-    """SQLite expression mirroring the important character normalization rules"""
+    """SQLite expression mirroring the important character normalization rules."""
     expression = Product.name
     for source, target in _PERSIAN_SEARCH_REPLACEMENTS:
         expression = func.replace(expression, source, target)
@@ -677,6 +679,312 @@ def _replace_product_categories(session: Session, product_id: int, category_ids:
 
     for category_id in sorted(requested_ids - set(existing_by_category)):
         session.add(ProductCategoryLink(product_id=product_id, category_id=category_id))
+
+
+_BULK_NUMERIC_FIELDS = {"price", "purchase_price", "stock_quantity"}
+_BULK_MAX_GROUPS = 20
+_BULK_MAX_CONDITIONS = 60
+_BULK_MAX_PRICE = 9_000_000_000_000_000
+
+
+def _bulk_decimal(raw, label: str) -> Decimal:
+    text = str(raw if raw is not None else "").strip()
+    digit_map = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    text = text.translate(digit_map).replace("٬", "").replace(",", "").replace("٫", ".")
+    text = "".join(text.split())
+    if not text:
+        raise HTTPException(400, f"{label} را وارد کنید")
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise HTTPException(400, f"{label} نامعتبر است") from exc
+    if not value.is_finite():
+        raise HTTPException(400, f"{label} نامعتبر است")
+    return value
+
+
+def _bulk_normalize_filter(raw_filter, session: Session, user: User) -> dict:
+    if not isinstance(raw_filter, dict):
+        raise HTTPException(400, "ساختار فیلترها نامعتبر است")
+
+    root_logic = str(raw_filter.get("logic", "and")).lower()
+    if root_logic not in {"and", "or"}:
+        raise HTTPException(400, "ترکیب گروه‌های فیلتر نامعتبر است")
+
+    raw_groups = raw_filter.get("groups")
+    if not isinstance(raw_groups, list) or not raw_groups or len(raw_groups) > _BULK_MAX_GROUPS:
+        raise HTTPException(400, "حداقل یک گروه فیلتر لازم است و حداکثر ۲۰ گروه مجاز است")
+
+    groups: list[dict] = []
+    total_conditions = 0
+    referenced_categories: set[int] = set()
+
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, dict):
+            raise HTTPException(400, "یکی از گروه‌های فیلتر نامعتبر است")
+        group_logic = str(raw_group.get("logic", "and")).lower()
+        if group_logic not in {"and", "or"}:
+            raise HTTPException(400, "ترکیب شرط‌های یک گروه نامعتبر است")
+        raw_conditions = raw_group.get("conditions")
+        if not isinstance(raw_conditions, list) or not raw_conditions:
+            raise HTTPException(400, "هر گروه باید حداقل یک شرط داشته باشد")
+
+        conditions: list[dict] = []
+        for raw_condition in raw_conditions:
+            total_conditions += 1
+            if total_conditions > _BULK_MAX_CONDITIONS:
+                raise HTTPException(400, "حداکثر ۶۰ شرط فیلتر مجاز است")
+            if not isinstance(raw_condition, dict):
+                raise HTTPException(400, "یکی از شرط‌های فیلتر نامعتبر است")
+
+            field = str(raw_condition.get("field", "")).strip()
+            operator = str(raw_condition.get("operator", "")).strip().lower()
+            value = raw_condition.get("value")
+
+            if field == "name":
+                if operator not in {"contains", "not_contains", "starts_with", "equals"}:
+                    raise HTTPException(400, "عملگر فیلتر نام کالا نامعتبر است")
+                text_value = _normalize_product_search(str(value or ""))
+                if not text_value or len(text_value) > 120:
+                    raise HTTPException(400, "متن جستجوی نام کالا باید بین ۱ تا ۱۲۰ نویسه باشد")
+                conditions.append({"field": field, "operator": operator, "value": text_value})
+
+            elif field == "category":
+                if operator == "uncategorized":
+                    conditions.append({"field": field, "operator": operator, "value": []})
+                    continue
+                if operator not in {"any_of", "all_of", "none_of"}:
+                    raise HTTPException(400, "عملگر فیلتر دسته‌بندی نامعتبر است")
+                if not isinstance(value, list) or not value or len(value) > 50:
+                    raise HTTPException(400, "برای فیلتر دسته‌بندی، حداقل یک دسته انتخاب کنید")
+                category_ids = []
+                for raw_id in value:
+                    try:
+                        category_id = int(raw_id)
+                    except (TypeError, ValueError) as exc:
+                        raise HTTPException(400, "شناسه دسته‌بندی نامعتبر است") from exc
+                    if category_id <= 0:
+                        raise HTTPException(400, "شناسه دسته‌بندی نامعتبر است")
+                    if category_id not in category_ids:
+                        category_ids.append(category_id)
+                referenced_categories.update(category_ids)
+                conditions.append({"field": field, "operator": operator,
+                                   "value": sorted(category_ids)})
+
+            elif field in _BULK_NUMERIC_FIELDS:
+                if field == "purchase_price" and not user.has_permission("view_purchase_cost"):
+                    raise HTTPException(403, "برای فیلتر قیمت خرید دسترسی لازم را ندارید")
+                if operator not in {"eq", "gt", "gte", "lt", "lte", "between"}:
+                    raise HTTPException(400, "عملگر فیلتر عددی نامعتبر است")
+                if operator == "between":
+                    if not isinstance(value, list) or len(value) != 2:
+                        raise HTTPException(400, "برای بازه، حداقل و حداکثر را وارد کنید")
+                    low = _bulk_decimal(value[0], "حداقل بازه")
+                    high = _bulk_decimal(value[1], "حداکثر بازه")
+                    if low < 0 or high < low or low != low.to_integral_value() or high != high.to_integral_value():
+                        raise HTTPException(400, "بازه باید شامل اعداد صحیح و نامنفی باشد")
+                    normalized_value = [str(int(low)), str(int(high))]
+                else:
+                    number = _bulk_decimal(value, "مقدار فیلتر")
+                    if number < 0 or number != number.to_integral_value():
+                        raise HTTPException(400, "مقدار فیلتر باید عدد صحیح و نامنفی باشد")
+                    normalized_value = str(int(number))
+                conditions.append({"field": field, "operator": operator,
+                                   "value": normalized_value})
+
+            elif field == "status":
+                if operator not in {"is", "is_not"} or not isinstance(value, str) or value not in {"active", "inactive"}:
+                    raise HTTPException(400, "فیلتر وضعیت محصول نامعتبر است")
+                conditions.append({"field": field, "operator": operator, "value": value})
+
+            else:
+                raise HTTPException(400, "نوع یکی از فیلترها پشتیبانی نمی‌شود")
+
+        groups.append({"logic": group_logic, "conditions": conditions})
+
+    if referenced_categories:
+        _validate_category_ids(session, sorted(referenced_categories))
+
+    return {"logic": root_logic, "groups": groups}
+
+
+def _bulk_build_filter_expression(normalized_filter: dict):
+    group_expressions = []
+    for group in normalized_filter["groups"]:
+        condition_expressions = []
+        for condition in group["conditions"]:
+            field = condition["field"]
+            operator = condition["operator"]
+            value = condition["value"]
+
+            if field == "name":
+                name_expr = _normalized_product_name_sql()
+                if operator == "contains":
+                    condition_expr = name_expr.like(f"%{_escape_like(value)}%", escape="\\")
+                elif operator == "not_contains":
+                    condition_expr = ~name_expr.like(f"%{_escape_like(value)}%", escape="\\")
+                elif operator == "starts_with":
+                    condition_expr = name_expr.like(f"{_escape_like(value)}%", escape="\\")
+                else:
+                    condition_expr = func.lower(name_expr) == value
+
+            elif field == "category":
+                if operator == "uncategorized":
+                    condition_expr = ~exists(
+                        select(ProductCategoryLink.id).where(
+                            ProductCategoryLink.product_id == Product.id
+                        )
+                    )
+                else:
+                    category_ids = value
+                    matching_links = select(ProductCategoryLink.id).where(
+                        ProductCategoryLink.product_id == Product.id,
+                        ProductCategoryLink.category_id.in_(category_ids),
+                    )
+                    if operator == "any_of":
+                        condition_expr = exists(matching_links)
+                    elif operator == "none_of":
+                        condition_expr = ~exists(matching_links)
+                    else:
+                        category_count = select(
+                            func.count(func.distinct(ProductCategoryLink.category_id))
+                        ).where(
+                            ProductCategoryLink.product_id == Product.id,
+                            ProductCategoryLink.category_id.in_(category_ids),
+                        ).scalar_subquery()
+                        condition_expr = category_count == len(category_ids)
+
+            elif field in _BULK_NUMERIC_FIELDS:
+                column = getattr(Product, field)
+                if operator == "between":
+                    condition_expr = column.between(int(value[0]), int(value[1]))
+                else:
+                    number = int(value)
+                    operator_map = {
+                        "eq": column == number,
+                        "gt": column > number,
+                        "gte": column >= number,
+                        "lt": column < number,
+                        "lte": column <= number,
+                    }
+                    condition_expr = operator_map[operator]
+
+            else:  # status
+                active = value == "active"
+                condition_expr = (Product.is_active == active)
+                if operator == "is_not":
+                    condition_expr = ~condition_expr
+
+            condition_expressions.append(condition_expr)
+
+        group_expressions.append(
+            and_(*condition_expressions) if group["logic"] == "and"
+            else or_(*condition_expressions)
+        )
+
+    return (and_(*group_expressions) if normalized_filter["logic"] == "and"
+            else or_(*group_expressions))
+
+
+def _bulk_parse_adjustment(data: dict, user: User) -> dict:
+    target_field = str(data.get("target_field", "price"))
+    if target_field not in {"price", "purchase_price"}:
+        raise HTTPException(400, "نوع قیمت انتخاب‌شده نامعتبر است")
+    if target_field == "purchase_price" and not user.has_permission("view_purchase_cost"):
+        raise HTTPException(403, "برای تغییر قیمت خرید دسترسی لازم را ندارید")
+
+    change_type = str(data.get("change_type", "amount"))
+    direction = str(data.get("direction", "increase"))
+    if change_type not in {"amount", "percent"}:
+        raise HTTPException(400, "نوع تغییر قیمت نامعتبر است")
+    if direction not in {"increase", "decrease"}:
+        raise HTTPException(400, "جهت تغییر قیمت نامعتبر است")
+
+    value = _bulk_decimal(data.get("value"), "مقدار تغییر قیمت")
+    if value <= 0:
+        raise HTTPException(400, "مقدار تغییر قیمت باید بیشتر از صفر باشد")
+    if change_type == "amount":
+        if value != value.to_integral_value() or value > _BULK_MAX_PRICE:
+            raise HTTPException(400, "تغییر مقداری باید یک عدد صحیح و معتبر باشد")
+    else:
+        if value > 10000 or (direction == "decrease" and value > 100):
+            raise HTTPException(400, "درصد واردشده خارج از محدوده مجاز است")
+        if value.as_tuple().exponent < -2:
+            raise HTTPException(400, "درصد حداکثر می‌تواند دو رقم اعشار داشته باشد")
+
+    normalized_value = format(value.normalize(), "f")
+    return {
+        "target_field": target_field,
+        "change_type": change_type,
+        "direction": direction,
+        "value": normalized_value,
+    }
+
+
+def _bulk_calculate_new_price(old_value: int, adjustment: dict) -> int:
+    value = Decimal(adjustment["value"])
+    if adjustment["change_type"] == "amount":
+        amount = int(value)
+        new_value = old_value + amount if adjustment["direction"] == "increase" else old_value - amount
+    else:
+        ratio = value / Decimal(100)
+        multiplier = Decimal(1) + ratio if adjustment["direction"] == "increase" else Decimal(1) - ratio
+        new_value = int((Decimal(old_value) * multiplier).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    if new_value < 0:
+        raise ValueError("negative price")
+    if new_value > _BULK_MAX_PRICE:
+        raise ValueError("price overflow")
+    return new_value
+
+
+def _bulk_collect_rows(session: Session, normalized_filter: dict, adjustment: dict) -> list[dict]:
+    target_field = adjustment["target_field"]
+    target_column = getattr(Product, target_field)
+    filter_expression = _bulk_build_filter_expression(normalized_filter)
+    products = session.exec(
+        select(Product).where(filter_expression, target_column.is_not(None)).order_by(Product.id)
+    ).all()
+
+    rows = []
+    invalid_names = []
+    for product in products:
+        old_value = int(getattr(product, target_field))
+        try:
+            new_value = _bulk_calculate_new_price(old_value, adjustment)
+        except ValueError:
+            if len(invalid_names) < 5:
+                invalid_names.append(product.name)
+            continue
+        if new_value == old_value:
+            continue
+        rows.append({"product_id": product.id, "name": product.name,
+                     "old_value": old_value, "new_value": new_value,
+                     "is_active": bool(product.is_active)})
+
+    if invalid_names:
+        joined = "، ".join(invalid_names)
+        raise HTTPException(
+            400,
+            f"تغییر انتخاب‌شده برای بعضی کالاها قیمت منفی یا خارج از محدوده ایجاد می‌کند؛ عملیات انجام نشد. نمونه: {joined}",
+        )
+    return rows
+
+
+def _bulk_preview_signature(request: Request, normalized_filter: dict,
+                            adjustment: dict, rows: list[dict]) -> str:
+    session = get_session(request)
+    if not session:
+        raise HTTPException(403, "نشست کاربری معتبر نیست؛ دوباره وارد شوید")
+    signature_data = {
+        "user_id": request.state.current_user.id,
+        "filter": normalized_filter,
+        "adjustment": adjustment,
+        "rows": [[row["product_id"], row["name"], row["is_active"],
+                   row["old_value"], row["new_value"]] for row in rows],
+    }
+    serialized = json.dumps(signature_data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hmac.new(session.csrf_token.encode("utf-8"), serialized.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _to_int(v):
@@ -1082,6 +1390,283 @@ def admin_page(request: Request, user: User = Depends(require_user)):
                   product_creators=product_creators,
                   return_deduction_percent=return_deduction_percent,
                   can_view_purchase_cost=user.has_permission("view_purchase_cost"))
+
+
+# Bulk price update
+
+@app.get("/admin/bulk-price-update", response_class=HTMLResponse)
+def bulk_price_update_page(request: Request,
+                           user: User = Depends(require_permission("manage_products"))):
+    with Session(engine) as s:
+        categories = s.exec(select(Category)).all()
+        categories.sort(key=lambda category: _persian_product_sort_key(category.name))
+        operations = s.exec(
+            select(BulkPriceUpdateOperation).order_by(desc(BulkPriceUpdateOperation.id)).limit(30)
+        ).all()
+        operation_users = {}
+        for operation in operations:
+            if operation.created_by_id:
+                creator = s.get(User, operation.created_by_id)
+                operation_users[operation.id] = creator.username if creator else "کاربر حذف‌شده"
+    return render(
+        request,
+        "bulk_price_update.html",
+        categories=[{"id": c.id, "name": c.name} for c in categories],
+        operations=operations,
+        operation_users=operation_users,
+        can_view_purchase_cost=user.has_permission("view_purchase_cost"),
+    )
+
+
+async def _read_bulk_json(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "داده ارسالی معتبر نیست") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "ساختار داده ارسالی نامعتبر است")
+    return payload
+
+
+@app.post("/api/bulk-price/preview")
+async def bulk_price_update_preview(
+    request: Request,
+    user: User = Depends(require_permission("manage_products")),
+):
+    verify_csrf_header(request)
+    payload = await _read_bulk_json(request)
+    with Session(engine) as s:
+        normalized_filter = _bulk_normalize_filter(payload.get("filters"), s, user)
+        adjustment = _bulk_parse_adjustment(payload, user)
+        rows = _bulk_collect_rows(s, normalized_filter, adjustment)
+
+    if not rows:
+        return {
+            "matched_count": 0,
+            "shown_count": 0,
+            "products": [],
+            "total_before": 0,
+            "total_after": 0,
+            "total_delta": 0,
+            "preview_token": _bulk_preview_signature(request, normalized_filter, adjustment, rows),
+        }
+
+    preview_token = _bulk_preview_signature(request, normalized_filter, adjustment, rows)
+    shown_rows = rows[:150]
+    return {
+        "matched_count": len(rows),
+        "shown_count": len(shown_rows),
+        "products": shown_rows,
+        "total_before": sum(row["old_value"] for row in rows),
+        "total_after": sum(row["new_value"] for row in rows),
+        "total_delta": sum(row["new_value"] - row["old_value"] for row in rows),
+        "preview_token": preview_token,
+    }
+
+
+@app.post("/api/bulk-price/apply")
+async def bulk_price_update_apply(
+    request: Request,
+    user: User = Depends(require_permission("manage_products")),
+):
+    verify_csrf_header(request)
+    payload = await _read_bulk_json(request)
+    preview_token = str(payload.get("preview_token", ""))
+    if not preview_token:
+        raise HTTPException(400, "ابتدا پیش‌نمایش را دریافت کنید")
+
+    with Session(engine) as s:
+        normalized_filter = _bulk_normalize_filter(payload.get("filters"), s, user)
+        adjustment = _bulk_parse_adjustment(payload, user)
+        rows = _bulk_collect_rows(s, normalized_filter, adjustment)
+        expected_token = _bulk_preview_signature(request, normalized_filter, adjustment, rows)
+        if not hmac.compare_digest(preview_token, expected_token):
+            raise HTTPException(
+                409,
+                "اطلاعات محصولات از زمان پیش‌نمایش تغییر کرده است؛ برای جلوگیری از اعمال قیمت اشتباه، دوباره پیش‌نمایش بگیرید.",
+            )
+        if not rows:
+            raise HTTPException(400, "هیچ محصولی برای تغییر قیمت پیدا نشد")
+
+        now = utcnow()
+        operation = BulkPriceUpdateOperation(
+            target_field=adjustment["target_field"],
+            change_type=adjustment["change_type"],
+            direction=adjustment["direction"],
+            change_value=adjustment["value"],
+            filter_json=json.dumps(normalized_filter, ensure_ascii=False, sort_keys=True),
+            matched_count=len(rows),
+            created_by_id=user.id,
+            created_at=now,
+            applied_at=now,
+            status="applied",
+        )
+        s.add(operation)
+        s.flush()
+        operation_id = operation.id
+        target_field = adjustment["target_field"]
+
+        for row in rows:
+            product = s.get(Product, row["product_id"])
+            if not product or getattr(product, target_field) != row["old_value"]:
+                raise HTTPException(409, "یکی از محصولات هم‌زمان تغییر کرده است؛ پیش‌نمایش را دوباره بگیرید")
+
+            old_price = product.price
+            old_purchase_price = product.purchase_price
+            setattr(product, target_field, row["new_value"])
+            product.updated_at = now
+            product.updated_by_id = user.id
+            s.add(product)
+
+            history = ProductPriceHistory(
+                product_id=product.id,
+                old_price=old_price,
+                new_price=product.price,
+                old_purchase_price=old_purchase_price,
+                new_purchase_price=product.purchase_price,
+                changed_by_id=user.id,
+                changed_at=now,
+            )
+            s.add(history)
+            s.flush()
+            s.add(BulkPriceUpdateItem(
+                operation_id=operation_id,
+                product_id=product.id,
+                old_value=row["old_value"],
+                new_value=row["new_value"],
+                price_history_id=history.id,
+                rolled_back=False,
+            ))
+
+        s.commit()
+
+    write_audit(
+        engine, request, "product.bulk_price_update", user=user,
+        target_type="bulk_price_update", target_id=operation_id,
+        metadata_json=json.dumps({
+            "target_field": adjustment["target_field"],
+            "change_type": adjustment["change_type"],
+            "direction": adjustment["direction"],
+            "value": adjustment["value"],
+            "matched_count": len(rows),
+            "filter": normalized_filter,
+        }, ensure_ascii=False),
+    )
+    return {"ok": True, "operation_id": operation_id, "updated_count": len(rows)}
+
+
+@app.post("/api/bulk-price/operations/{operation_id}/rollback")
+async def bulk_price_update_rollback(
+    operation_id: int,
+    request: Request,
+    user: User = Depends(require_permission("manage_products")),
+):
+    verify_csrf_header(request)
+    rolled_back_count = 0
+    skipped_count = 0
+    with Session(engine) as s:
+        operation = s.get(BulkPriceUpdateOperation, operation_id)
+        if not operation:
+            raise HTTPException(404, "عملیات گروهی پیدا نشد")
+        target_field = operation.target_field
+        if target_field == "purchase_price" and not user.has_permission("view_purchase_cost"):
+            raise HTTPException(403, "برای بازگردانی تغییر قیمت خرید دسترسی لازم را ندارید")
+        items = s.exec(
+            select(BulkPriceUpdateItem).where(
+                BulkPriceUpdateItem.operation_id == operation_id
+            ).order_by(BulkPriceUpdateItem.id)
+        ).all()
+        if not items:
+            raise HTTPException(400, "برای این عملیات سابقه‌ای وجود ندارد")
+
+        now = utcnow()
+        for item in items:
+            if item.rolled_back:
+                continue
+            if not item.price_history_id:
+                skipped_count += 1
+                continue
+            product = s.get(Product, item.product_id)
+            original_history = s.get(ProductPriceHistory, item.price_history_id)
+            if not product or not original_history or getattr(product, target_field) != item.new_value:
+                skipped_count += 1
+                continue
+
+            if target_field == "price":
+                field_changed_afterward = s.exec(
+                    select(ProductPriceHistory.id).where(
+                        ProductPriceHistory.product_id == item.product_id,
+                        ProductPriceHistory.id > original_history.id,
+                        ProductPriceHistory.old_price.is_distinct_from(ProductPriceHistory.new_price),
+                    ).limit(1)
+                ).first()
+            else:
+                field_changed_afterward = s.exec(
+                    select(ProductPriceHistory.id).where(
+                        ProductPriceHistory.product_id == item.product_id,
+                        ProductPriceHistory.id > original_history.id,
+                        ProductPriceHistory.old_purchase_price.is_distinct_from(
+                            ProductPriceHistory.new_purchase_price
+                        ),
+                    ).limit(1)
+                ).first()
+            if field_changed_afterward:
+                skipped_count += 1
+                continue
+
+            old_price = product.price
+            old_purchase_price = product.purchase_price
+            setattr(product, target_field, item.old_value)
+            product.updated_at = now
+            product.updated_by_id = user.id
+            s.add(product)
+
+            rollback_history = ProductPriceHistory(
+                product_id=product.id,
+                old_price=old_price,
+                new_price=product.price,
+                old_purchase_price=old_purchase_price,
+                new_purchase_price=product.purchase_price,
+                changed_by_id=user.id,
+                changed_at=now,
+            )
+            s.add(rollback_history)
+            s.flush()
+            item.rolled_back = True
+            item.rollback_history_id = rollback_history.id
+            s.add(item)
+            rolled_back_count += 1
+
+        # Count all stored rollback flags, including items reverted in earlier partial attempts.
+        operation.rolled_back_count = sum(1 for item in items if item.rolled_back)
+        if operation.rolled_back_count == len(items):
+            operation.status = "rolled_back"
+        elif operation.rolled_back_count:
+            operation.status = "partially_rolled_back"
+        else:
+            operation.status = "applied"
+        if rolled_back_count:
+            operation.rolled_back_at = now
+        s.add(operation)
+        s.commit()
+        status = operation.status
+
+    write_audit(
+        engine, request, "product.bulk_price_update.rollback", user=user,
+        target_type="bulk_price_update", target_id=operation_id,
+        metadata_json=json.dumps({
+            "rolled_back_count": rolled_back_count,
+            "skipped_count": skipped_count,
+            "status": status,
+        }, ensure_ascii=False),
+    )
+    return {
+        "ok": True,
+        "operation_id": operation_id,
+        "rolled_back_count": rolled_back_count,
+        "skipped_count": skipped_count,
+        "status": status,
+    }
 
 
 # Reports

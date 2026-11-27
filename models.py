@@ -129,6 +129,35 @@ class ProductPriceHistory(SQLModel, table=True):
     changed_at: NaiveDatetime = Field(default_factory=utcnow_naive)
 
 
+class BulkPriceUpdateOperation(SQLModel, table=True):
+    """A single previewed and applied bulk price adjustment"""
+    id: int = Field(default=None, primary_key=True)
+    target_field: str
+    change_type: str
+    direction: str
+    change_value: str
+    filter_json: str
+    matched_count: int = 0
+    rolled_back_count: int = 0
+    status: str = Field(default="applied", index=True)
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
+    applied_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    rolled_back_at: Optional[NaiveDatetime] = None
+
+
+class BulkPriceUpdateItem(SQLModel, table=True):
+    """Per-product before/after values for safe, selective rollback"""
+    id: int = Field(default=None, primary_key=True)
+    operation_id: int = Field(foreign_key="bulkpriceupdateoperation.id", index=True)
+    product_id: int = Field(foreign_key="product.id", index=True)
+    old_value: int
+    new_value: int
+    price_history_id: Optional[int] = Field(default=None, foreign_key="productpricehistory.id")
+    rolled_back: bool = False
+    rollback_history_id: Optional[int] = Field(default=None, foreign_key="productpricehistory.id")
+
+
 class InventoryMovement(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     product_id: int = Field(foreign_key="product.id", index=True)
