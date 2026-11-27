@@ -17,6 +17,7 @@ from rate_limit import RateLimiter
 from audit import write_audit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3, re, unicodedata
 from html import escape as html_escape
@@ -184,6 +185,7 @@ def _migrate_legacy_schema() -> None:
             "can_view_purchase_cost": "BOOLEAN NOT NULL DEFAULT 0",
         },
         "storesettings": {
+            "paper_size": "TEXT NOT NULL DEFAULT 'A5'",
             "return_deduction_percent": "INTEGER NOT NULL DEFAULT 15",
         },
         "product": {
@@ -220,6 +222,45 @@ def _migrate_legacy_schema() -> None:
             for column, ddl in columns.items():
                 if column not in present:
                     conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def gregorian_to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    """Convert Gregorian date to Jalali (Persian) date."""
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    if gm > 2:
+        gy2 = gy + 1
+    else:
+        gy2 = gy
+    days = (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) - 80 + gd + g_d_m[gm - 1]
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + ((days - 186) % 30)
+    return jy, jm, jd
+
+
+def format_jalali_tehran(dt: datetime) -> str:
+    """Format a naive-UTC datetime as Jalali date + Tehran time."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    tehran = dt.astimezone(ZoneInfo("Asia/Tehran"))
+    jy, jm, jd = gregorian_to_jalali(tehran.year, tehran.month, tehran.day)
+    return f"{jy:04d}/{jm:02d}/{jd:02d} - {tehran.strftime('%H:%M')}"
 
 
 def utcnow() -> datetime:
@@ -415,12 +456,8 @@ def render(request: Request, name: str, status_code: int = 200, **ctx):
         })();
         </script>""")
 
-    if path.startswith("/invoice/"):
-        items = ctx.get("items") or []
-        additions.append(_discount_breakdown_html(
-            items, ctx.get("total_discount", 0), getattr(ctx.get("sale"), "discount_amount", 0)
-        ))
-    elif re.fullmatch(r"/sales/\d+", path):
+    # جدول جزئیات تخفیف فقط در صفحه مدیریت فاکتور نشان داده می‌شود، نه در صفحه پرینت فاکتور
+    if re.fullmatch(r"/sales/\d+", path):
         data = ctx.get("data") or {}
         items = data.get("items") or data.get("values") or []
         sale = data.get("sale")
@@ -2014,16 +2051,35 @@ def invoice_page(sale_id: int, request: Request,
         total_discount = sum(it.discount_per_unit * it.quantity + int(getattr(it, "discount_total", 0) or 0) for it in items) + int(getattr(sale, "discount_amount", 0) or 0)
         total_words = number_to_persian(total_final) + " تومان" if total_final else ""
 
+        # فیلدهای محرمانه که نباید روی فاکتور ظاهر شوند
+        # فیلدهای محرمانه (جنسیت، سن، قد) نباید روی فاکتور ظاهر شوند
+        def is_confidential(name: str) -> bool:
+            n = (name or "").strip()
+            return any(k in n for k in ("جنسیت", "سن", "قد"))
         extras = [
             {"name": sale_cols.get(v.column_id, "?"), "value": v.value}
             for v in sale_values
+            if not is_confidential(sale_cols.get(v.column_id, ""))
         ]
+
+        item_count = len(items)
+        # تخفیف‌های واحد و ردیف (بدون تخفیف کل فاکتور)
+        line_discounts = sum(
+            int(it.discount_per_unit or 0) * int(it.quantity or 0) + int(getattr(it, "discount_total", 0) or 0)
+            for it in items
+        )
+        invoice_discount = int(getattr(sale, "discount_amount", 0) or 0)
+        jalali_date = format_jalali_tehran(sale.created_at)
+        paper_size = (settings.paper_size if settings and getattr(settings, "paper_size", None) else "A5")
 
     return render(request, "invoice.html",
                   sale=sale, customer=customer, items=items, extras=extras, settings=settings,
                   total_qty=total_qty, total_final=total_final,
                   cash_paid=getattr(sale, "cash_paid", None), wallet_paid=int(getattr(sale, "wallet_paid", 0) or 0),
-                  total_discount=total_discount, total_words=total_words)
+                  total_discount=total_discount, total_words=total_words,
+                  item_count=item_count, line_discounts=line_discounts,
+                  invoice_discount=invoice_discount, jalali_date=jalali_date,
+                  paper_size=paper_size)
 
 # Sales query & export
 
@@ -3335,6 +3391,10 @@ async def owner_settings_update(request: Request, user: User = Depends(require_o
         settings.phone = str(form.get("phone", "")).strip() or None
         settings.address = str(form.get("address", "")).strip() or None
         settings.currency = str(form.get("currency", "")).strip() or "تومان"
+        paper = str(form.get("paper_size", "A5")).strip()
+        if paper not in ("A4", "A5", "thermal"):
+            paper = "A5"
+        settings.paper_size = paper
         settings.updated_at = utcnow()
         s.add(settings)
         s.commit()

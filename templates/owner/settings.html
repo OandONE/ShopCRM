@@ -41,6 +41,16 @@
                    value="{{ settings.currency if settings else 'تومان' }}">
           </div>
 
+          <div class="mb-3">
+            <label class="form-label">اندازه کاغذ فاکتور</label>
+            <select class="form-select" name="paper_size">
+              <option value="A5" {% if not settings or settings.paper_size == 'A5' %}selected{% endif %}>A5 (پیش‌فرض)</option>
+              <option value="A4" {% if settings and settings.paper_size == 'A4' %}selected{% endif %}>A4</option>
+              <option value="thermal" {% if settings and settings.paper_size == 'thermal' %}selected{% endif %}>رول کاغذ حرارتی</option>
+            </select>
+            <div class="form-text">جهت صفحه همیشه عمودی است. جدول‌های طولانی به صفحه بعد می‌روند.</div>
+          </div>
+
           <button type="submit" class="btn btn-success">
             <i class="bi bi-check2-circle"></i> ذخیره تنظیمات
           </button>

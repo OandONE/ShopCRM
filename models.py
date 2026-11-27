@@ -60,6 +60,7 @@ class StoreSettings(SQLModel, table=True):
     phone: Optional[str] = None
     address: Optional[str] = None
     currency: str = "تومان"
+    paper_size: str = "A5"  # A4 | A5 | thermal
     return_deduction_percent: int = 15
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
 
