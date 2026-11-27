@@ -8,6 +8,7 @@
 </div>
 
 <div class="invoice-page paper-{{ paper_size|default('A5') }}">
+  <div class="invoice-watermark">{{ settings.name if settings else 'فروشگاه' }}</div>
   <header class="invoice-header">
     <h1>{{ settings.name if settings else 'فروشگاه' }}</h1>
     {% if settings and settings.phone %}<div class="sub">تلفن: {{ settings.phone }}</div>{% endif %}
@@ -115,7 +116,33 @@
   .invoice-table tfoot { display: table-footer-group; }
 }
 
+.invoice-watermark {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-35deg);
+  font-size: 48pt;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.06);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 0;
+  user-select: none;
+  font-family: Vazirmatn, Tahoma, sans-serif;
+}
+.paper-thermal .invoice-watermark { font-size: 28pt; }
+@media print {
+  .invoice-watermark {
+    position: absolute;
+    color: rgba(0, 0, 0, 0.08);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 .invoice-page {
+  position: relative;
+  z-index: 1;
   max-width: var(--page-w, 148mm);
   margin: 8mm auto;
   padding: 6mm;
