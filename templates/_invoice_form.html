@@ -73,6 +73,51 @@
   </div>
   {% endif %}
 
+  <!-- مشتری و روش پرداخت -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-info text-dark d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span><i class="bi bi-wallet2"></i> مشتری و روش پرداخت</span>
+      <a href="/customers" target="_blank" class="btn btn-sm btn-outline-dark">مدیریت مشتری‌ها و کیف پول</a>
+    </div>
+    <div class="card-body">
+      <div class="small text-body-secondary mb-2">روش «نقدی» شامل پول نقد، کارت‌خوان و کارت‌به‌کارت است؛ نوع دقیق دریافت جداگانه ذخیره نمی‌شود و بررسی دریافت وجه با ادمین است.</div>
+      <div class="row g-3 align-items-end">
+        <div class="col-md-5">
+          <label class="form-label" for="invoice-customer-id">مشتری (برای فاکتور نقدی اختیاری است)</label>
+          <select id="invoice-customer-id" class="form-select">
+            <option value="">بدون اتصال به مشتری</option>
+          </select>
+          <small id="invoice-customer-balance" class="form-text text-body-secondary">برای پرداخت کیف پول، مشتری را انتخاب کنید.</small>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="invoice-payment-method">روش پرداخت</label>
+          <select id="invoice-payment-method" class="form-select">
+            <option value="cash">نقدی</option>
+            <option value="wallet">کیف پول</option>
+            <option value="mixed">ترکیبی: نقدی + کیف پول</option>
+          </select>
+        </div>
+        <div class="col-md-4 d-none" id="invoice-cash-part-wrap">
+          <label class="form-label" for="invoice-cash-part">مبلغ پرداخت نقدی (تومان)</label>
+          <input id="invoice-cash-part" class="form-control" inputmode="numeric" value="0">
+          <small class="text-body-secondary">باقی‌مانده به‌صورت خودکار از کیف پول محاسبه می‌شود.</small>
+        </div>
+      </div>
+      <div class="row g-2 mt-2">
+        <div class="col-md-6"><div class="border rounded p-2">
+          <div class="small text-body-secondary">سهم پرداخت نقدی</div><strong id="invoice-cash-preview">۰ تومان</strong>
+        </div></div>
+        <div class="col-md-6"><div class="border rounded p-2">
+          <div class="small text-body-secondary">سهم پرداخت از کیف پول</div><strong id="invoice-wallet-preview">۰ تومان</strong>
+        </div></div>
+      </div>
+      <div id="invoice-wallet-warning" class="alert alert-warning mt-3 mb-0 d-none" role="alert">
+        موجودی کیف پول با این خرید منفی می‌شود. ثبت خرید مجاز است، اما بررسی و صحت‌سنجی بدهی بر عهده ادمین است.
+      </div>
+      <div id="invoice-payment-error" class="small text-danger mt-2" role="alert"></div>
+    </div>
+  </div>
+
   <!-- افزودن قلم -->
   <div class="card shadow-sm mb-3">
     <div class="card-header bg-primary text-white">

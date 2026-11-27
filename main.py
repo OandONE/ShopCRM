@@ -9,7 +9,7 @@ from models import (
     User, UserSession, StoreSettings, AuditLog,
     Column, Product, ProductPriceHistory, InventoryMovement,
     Sale, SaleValue, SaleItem, SaleItemValue, DeletedSale,
-    SaleReturn, SaleReturnItem, SavedAnalysis,
+    SaleReturn, SaleReturnItem, SavedAnalysis, Customer, WalletTransaction,
 )
 from shopcrm_analytics import build_analytics_router
 from rate_limit import RateLimiter
@@ -195,6 +195,14 @@ def _migrate_legacy_schema() -> None:
         },
         "sale": {
             "discount_amount": "INTEGER NOT NULL DEFAULT 0",
+            "customer_id": "INTEGER REFERENCES customer(id)",
+            "cash_paid": "INTEGER",
+            "wallet_paid": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "salereturn": {
+            "refund_method": "TEXT",
+            "approved_by_id": "INTEGER REFERENCES user(id)",
+            "approved_at": "DATETIME",
         },
         "saleitem": {
             "purchase_unit_price": "INTEGER",
@@ -214,6 +222,19 @@ def _migrate_legacy_schema() -> None:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _wallet_balance(session: Session, customer_id: int) -> int:
+    total = session.exec(
+        select(func.coalesce(func.sum(WalletTransaction.amount), 0)).where(
+            WalletTransaction.customer_id == customer_id
+        )
+    ).one()
+    return int(total or 0)
+
+
+def _money(value: int | None) -> int:
+    return int(value or 0)
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -775,6 +796,157 @@ def shortcuts_page(request: Request, user: User = Depends(require_user)):
     return render(request, "shortcuts.html")
 
 
+# Customers and wallet
+
+@app.get("/customers", response_class=HTMLResponse)
+def customers_page(request: Request, user: User = Depends(require_user)):
+    with Session(engine) as s:
+        customers = s.exec(select(Customer).order_by(Customer.full_name, Customer.id)).all()
+        balances = {customer.id: _wallet_balance(s, customer.id) for customer in customers}
+    return render(request, "customers.html", customers=customers, balances=balances)
+
+
+@app.get("/customers/{customer_id}", response_class=HTMLResponse)
+def customer_detail_page(customer_id: int, request: Request, user: User = Depends(require_user)):
+    with Session(engine) as s:
+        customer = s.get(Customer, customer_id)
+        if not customer:
+            raise HTTPException(404, "مشتری پیدا نشد")
+        balance = _wallet_balance(s, customer_id)
+        transactions = s.exec(
+            select(WalletTransaction).where(WalletTransaction.customer_id == customer_id)
+            .order_by(desc(WalletTransaction.created_at), desc(WalletTransaction.id)).limit(250)
+        ).all()
+        actors = {tx.id: (s.get(User, tx.created_by_id).username if tx.created_by_id and s.get(User, tx.created_by_id) else "—") for tx in transactions}
+        sales = s.exec(select(Sale).where(Sale.customer_id == customer_id).order_by(desc(Sale.id)).limit(30)).all()
+    return render(request, "customer_detail.html", customer=customer, balance=balance,
+                  transactions=transactions, actors=actors, sales=sales)
+
+
+@app.get("/api/customers/options")
+def customer_options(user: User = Depends(require_user)):
+    with Session(engine) as s:
+        customers = s.exec(select(Customer).where(Customer.is_active == True)
+                            .order_by(Customer.full_name).limit(1000)).all()
+        return [{"id": c.id, "full_name": c.full_name, "phone": c.phone or "",
+                 "balance": _wallet_balance(s, c.id)} for c in customers]
+
+
+@app.post("/api/customers/create")
+async def create_customer(request: Request, user: User = Depends(require_user)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    full_name = str(form.get("full_name", "")).strip()[:180]
+    phone = str(form.get("phone", "")).strip()[:40] or None
+    address = str(form.get("address", "")).strip()[:1000] or None
+    notes = str(form.get("notes", "")).strip()[:2000] or None
+    if not full_name:
+        raise HTTPException(400, "نام مشتری الزامی است")
+    with Session(engine) as s:
+        customer = Customer(full_name=full_name, phone=phone, address=address, notes=notes,
+                            created_by_id=user.id, updated_at=utcnow())
+        s.add(customer)
+        s.commit()
+        customer_id = customer.id
+    write_audit(engine, request, "customer.create", user=user, target_type="customer",
+                target_id=customer_id, metadata_json=json.dumps({"full_name": full_name}, ensure_ascii=False))
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+
+
+@app.post("/api/customers/{customer_id}/update")
+async def update_customer(customer_id: int, request: Request, user: User = Depends(require_user)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    full_name = str(form.get("full_name", "")).strip()[:180]
+    if not full_name:
+        raise HTTPException(400, "نام مشتری الزامی است")
+    with Session(engine) as s:
+        customer = s.get(Customer, customer_id)
+        if not customer:
+            raise HTTPException(404, "مشتری پیدا نشد")
+        customer.full_name = full_name
+        customer.phone = str(form.get("phone", "")).strip()[:40] or None
+        customer.address = str(form.get("address", "")).strip()[:1000] or None
+        customer.notes = str(form.get("notes", "")).strip()[:2000] or None
+        customer.updated_at = utcnow()
+        s.add(customer)
+        s.commit()
+    write_audit(engine, request, "customer.update", user=user, target_type="customer", target_id=customer_id)
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+
+
+@app.post("/api/customers/{customer_id}/topup")
+async def customer_wallet_topup(customer_id: int, request: Request, user: User = Depends(require_user)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    try:
+        amount = int(str(form.get("amount", "0")).replace(",", "").strip())
+    except (ValueError, TypeError):
+        raise HTTPException(400, "مبلغ شارژ نامعتبر است")
+    if amount <= 0:
+        raise HTTPException(400, "مبلغ شارژ باید بیشتر از صفر باشد")
+    note = str(form.get("note", "")).strip()[:1000] or "شارژ کیف پول"
+    with Session(engine) as s:
+        customer = s.get(Customer, customer_id)
+        if not customer:
+            raise HTTPException(404, "مشتری پیدا نشد")
+        tx = WalletTransaction(customer_id=customer_id, amount=amount, kind="topup",
+                               reference_type="topup", note=note, created_by_id=user.id)
+        s.add(tx)
+        s.commit()
+        new_balance = _wallet_balance(s, customer_id)
+    write_audit(engine, request, "wallet.topup", user=user, target_type="customer", target_id=customer_id,
+                metadata_json=json.dumps({"amount": amount, "balance_after": new_balance}, ensure_ascii=False))
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+
+
+@app.get("/wallet/returns", response_class=HTMLResponse)
+def wallet_return_queue(request: Request, user: User = Depends(require_owner)):
+    with Session(engine) as s:
+        pending = s.exec(select(SaleReturn).where(SaleReturn.refund_method.is_(None))
+                          .order_by(desc(SaleReturn.created_at))).all()
+        rows = []
+        for ret in pending:
+            sale = s.get(Sale, ret.sale_id)
+            customer = s.get(Customer, sale.customer_id) if sale and sale.customer_id else None
+            rows.append({"return": ret, "sale": sale, "customer": customer})
+    return render(request, "wallet_returns.html", rows=rows)
+
+
+@app.post("/api/owner/wallet-returns/{return_id}/approve")
+async def approve_wallet_return(return_id: int, request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    method = str(form.get("refund_method", "")).strip()
+    if method not in ("cash", "wallet"):
+        raise HTTPException(400, "روش بازپرداخت نامعتبر است")
+    with Session(engine) as s:
+        ret = s.get(SaleReturn, return_id)
+        if not ret:
+            raise HTTPException(404, "مرجوعی پیدا نشد")
+        if ret.refund_method is not None:
+            raise HTTPException(400, "روش بازپرداخت این مرجوعی قبلاً تعیین شده است")
+        sale = s.get(Sale, ret.sale_id)
+        if not sale:
+            raise HTTPException(400, "فاکتور اصلی پیدا نشد")
+        customer = s.get(Customer, sale.customer_id) if sale.customer_id else None
+        if method == "wallet":
+            if not customer:
+                raise HTTPException(400, "این فاکتور به حساب مشتری متصل نیست؛ بازپرداخت کیف پول ممکن نیست")
+            if ret.total_refund > 0:
+                s.add(WalletTransaction(customer_id=customer.id, amount=ret.total_refund, kind="sale_return",
+                                        reference_type="sale_return", reference_id=ret.id,
+                                        note=f"بازپرداخت مرجوعی فاکتور {sale.id}", created_by_id=user.id))
+        ret.refund_method = method
+        ret.approved_by_id = user.id
+        ret.approved_at = utcnow()
+        s.add(ret)
+        s.commit()
+    write_audit(engine, request, "wallet.return_approved", user=user, target_type="sale_return", target_id=return_id,
+                metadata_json=json.dumps({"refund_method": method}, ensure_ascii=False))
+    return RedirectResponse("/wallet/returns", status_code=303)
+
+
 # Admin page
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -874,6 +1046,7 @@ def _enrich_sale(session, sale: Sale) -> dict:
     items = session.exec(select(SaleItem).where(SaleItem.sale_id == sale.id)).all()
     sale_values = session.exec(select(SaleValue).where(SaleValue.sale_id == sale.id)).all()
     creator = session.get(User, sale.created_by_id) if sale.created_by_id else None
+    customer = session.get(Customer, sale.customer_id) if getattr(sale, "customer_id", None) else None
 
     total_qty = sum(it.quantity for it in items)
     item_discount_total = sum((it.discount_per_unit * it.quantity) + int(getattr(it, "discount_total", 0) or 0) for it in items)
@@ -893,6 +1066,9 @@ def _enrich_sale(session, sale: Sale) -> dict:
         "values": items,
         "sale_values": sale_values,
         "creator_username": creator.username if creator else None,
+        "customer": customer,
+        "cash_paid": getattr(sale, "cash_paid", None),
+        "wallet_paid": int(getattr(sale, "wallet_paid", 0) or 0),
         "total_qty": total_qty,
         "total_final": total_final,
         "total_discount": total_discount,
@@ -984,6 +1160,8 @@ def sale_returns_page(sale_id: int, request: Request,
                 "created_at": ret.created_at,
                 "total_refund": ret.total_refund,
                 "note": ret.note,
+                "refund_method": ret.refund_method,
+                "approved_at": ret.approved_at,
                 "actor": actor.username if actor else "—",
                 "items": details,
             })
@@ -1128,6 +1306,7 @@ def invoice_page(sale_id: int, request: Request,
             raise HTTPException(404, "فاکتور پیدا نشد")
 
         settings = s.exec(select(StoreSettings)).first()
+        customer = s.get(Customer, sale.customer_id) if sale.customer_id else None
         items = s.exec(select(SaleItem).where(SaleItem.sale_id == sale_id)).all()
         sale_values = s.exec(select(SaleValue).where(SaleValue.sale_id == sale_id)).all()
         sale_cols = {c.id: c.name for c in _get_columns(s, scope="sale")}
@@ -1147,8 +1326,9 @@ def invoice_page(sale_id: int, request: Request,
         ]
 
     return render(request, "invoice.html",
-                  sale=sale, items=items, extras=extras, settings=settings,
+                  sale=sale, customer=customer, items=items, extras=extras, settings=settings,
                   total_qty=total_qty, total_final=total_final,
+                  cash_paid=getattr(sale, "cash_paid", None), wallet_paid=int(getattr(sale, "wallet_paid", 0) or 0),
                   total_discount=total_discount, total_words=total_words)
 
 # Sales query & export
@@ -1414,9 +1594,19 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
     else:
         created_at = utcnow()
 
+    customer_id_raw = body.get("customer_id")
+    try:
+        customer_id = int(customer_id_raw) if customer_id_raw not in (None, "", 0, "0") else None
+    except (ValueError, TypeError):
+        raise HTTPException(400, "مشتری انتخاب‌شده نامعتبر است")
+
     validated = []
     stock_warnings = []
+    wallet_customer_name = None
     with Session(engine) as s:
+        customer = s.get(Customer, customer_id) if customer_id is not None else None
+        if customer_id is not None and (not customer or not customer.is_active):
+            raise HTTPException(400, "مشتری پیدا نشد یا غیرفعال است")
         all_columns = _get_columns(s)
         sale_cols = {c.id: c for c in all_columns if c.scope == "sale"}
         item_cols = {c.id: c for c in all_columns if c.scope == "item"}
@@ -1513,12 +1703,43 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
             values["invoice_discount_share"] = allocations[index]
             values["final_line_total"] = max(0, line_amounts[index] - allocations[index])
 
-        # The invoice and stock updates are committed as one transaction
+        payable_total = max(0, subtotal_after_item_discounts - invoice_discount_amount)
+        payment_method = str(body.get("payment_method", "cash")).strip().lower()
+        if payment_method not in ("cash", "wallet", "mixed"):
+            raise HTTPException(400, "روش پرداخت نامعتبر است")
+        try:
+            requested_cash = int(str(body.get("cash_paid", 0) or 0).replace(",", "").strip())
+            requested_wallet = int(str(body.get("wallet_paid", 0) or 0).replace(",", "").strip())
+        except (ValueError, TypeError):
+            raise HTTPException(400, "مبلغ پرداخت نامعتبر است")
+        if payment_method == "cash":
+            cash_paid, wallet_paid = payable_total, 0
+        elif payment_method == "wallet":
+            cash_paid, wallet_paid = 0, payable_total
+        else:
+            cash_paid, wallet_paid = requested_cash, requested_wallet
+        if cash_paid < 0 or wallet_paid < 0 or cash_paid + wallet_paid != payable_total:
+            raise HTTPException(400, "مجموع پرداخت نقدی و کیف پول باید دقیقاً برابر مبلغ فاکتور باشد")
+        if wallet_paid > 0 and not customer:
+            raise HTTPException(400, "برای پرداخت از کیف پول، ابتدا مشتری را انتخاب کنید")
+        wallet_balance_before = _wallet_balance(s, customer.id) if customer and wallet_paid > 0 else 0
+        wallet_balance_after = wallet_balance_before - wallet_paid if customer and wallet_paid > 0 else wallet_balance_before
+        wallet_negative_warning = bool(wallet_paid > 0 and wallet_balance_after < 0)
+        wallet_customer_name = customer.full_name if customer and wallet_paid else None
+
+        # The invoice, wallet entry and stock updates are committed as one transaction
         sale = Sale(created_at=created_at, created_by_id=user.id,
-                    discount_amount=invoice_discount_amount)
+                    discount_amount=invoice_discount_amount, customer_id=customer.id if customer else None,
+                    cash_paid=cash_paid, wallet_paid=wallet_paid)
         s.add(sale)
         s.flush()
         sale_id = sale.id
+        if wallet_paid > 0 and customer:
+            s.add(WalletTransaction(
+                customer_id=customer.id, amount=-wallet_paid, kind="sale_payment",
+                reference_type="sale", reference_id=sale_id,
+                note=f"پرداخت کیف پول بابت فاکتور {sale_id}", created_by_id=user.id,
+            ))
 
         for values in validated:
             custom = values.pop("custom_values", {})
@@ -1571,6 +1792,10 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
                 metadata_json=json.dumps({
                     "items_count": len(validated),
                     "total_discount": total_discount,
+                    "customer_id": customer_id,
+                    "cash_paid": cash_paid,
+                    "wallet_paid": wallet_paid,
+                    "wallet_balance_after": wallet_balance_after if wallet_paid else None,
                     "stock_warnings": stock_warnings,
                 }, ensure_ascii=False))
     if edited:
@@ -1587,6 +1812,9 @@ async def create_invoice(request: Request, user: User = Depends(require_user)):
         "redirect": f"/{source}",
         "invoice_url": f"/invoice/{sale_id}",
         "stock_warnings": stock_warnings,
+        "wallet_warning": wallet_negative_warning,
+        "wallet_balance_after": wallet_balance_after if wallet_paid else None,
+        "wallet_customer": wallet_customer_name,
     }
 
 
@@ -1608,6 +1836,13 @@ async def delete_sale(request: Request, user: User = Depends(require_permission(
         if s.exec(select(SaleReturn).where(SaleReturn.sale_id == sid)).first():
             raise HTTPException(400, "برای فاکتوری که مرجوعی ثبت‌شده دارد، حذف انجام نمی‌شود")
 
+        wallet_paid_for_sale = int(getattr(sale, "wallet_paid", 0) or 0)
+        refund_wallet_on_delete = str(form.get("refund_wallet", "")).lower() in ("on", "1", "true", "yes")
+        if wallet_paid_for_sale > 0 and not user.is_owner():
+            raise HTTPException(403, "حذف فاکتور پرداخت‌شده از کیف پول فقط با دسترسی مالک و تصمیم بازپرداخت ممکن است")
+        if refund_wallet_on_delete and wallet_paid_for_sale > 0 and not sale.customer_id:
+            raise HTTPException(400, "این فاکتور مشتری متصل ندارد و بازپرداخت کیف پول ممکن نیست")
+
         items = s.exec(select(SaleItem).where(SaleItem.sale_id == sid)).all()
         item_ids = [it.id for it in items]
         item_values = []
@@ -1624,6 +1859,10 @@ async def delete_sale(request: Request, user: User = Depends(require_permission(
                 "created_by_id": sale.created_by_id,
                 "note": sale.note,
                 "discount_amount": int(getattr(sale, "discount_amount", 0) or 0),
+                "customer_id": getattr(sale, "customer_id", None),
+                "cash_paid": getattr(sale, "cash_paid", None),
+                "wallet_paid": wallet_paid_for_sale,
+                "wallet_refunded_on_delete": bool(refund_wallet_on_delete and wallet_paid_for_sale > 0),
             },
             "items": [
                 {
@@ -1653,6 +1892,16 @@ async def delete_sale(request: Request, user: User = Depends(require_permission(
             data_json=json.dumps(backup, ensure_ascii=False),
             deleted_by_id=user.id,
         ))
+        if wallet_paid_for_sale > 0 and sale.customer_id:
+            s.add(WalletTransaction(
+                customer_id=sale.customer_id,
+                amount=wallet_paid_for_sale if refund_wallet_on_delete else 0,
+                kind="sale_delete_refund" if refund_wallet_on_delete else "sale_delete_no_refund",
+                reference_type="sale", reference_id=sid,
+                note=(f"بازپرداخت کیف پول بابت حذف فاکتور {sid}" if refund_wallet_on_delete
+                      else f"حذف فاکتور {sid} بدون بازپرداخت مبلغ کیف پول"),
+                created_by_id=user.id,
+            ))
 
         # Put back stock only for sales made after inventory tracking was enabled
         for it in items:
@@ -2347,9 +2596,19 @@ async def owner_restore_sale(did: int, request: Request, user: User = Depends(re
             created_by_id=sale_info.get("created_by_id"),
             note=sale_info.get("note"),
             discount_amount=int(sale_info.get("discount_amount", 0) or 0),
+            customer_id=sale_info.get("customer_id"),
+            cash_paid=sale_info.get("cash_paid"),
+            wallet_paid=int(sale_info.get("wallet_paid", 0) or 0),
         )
         s.add(sale)
         s.flush()
+        restored_wallet_paid = int(sale_info.get("wallet_paid", 0) or 0)
+        if sale_info.get("wallet_refunded_on_delete") and restored_wallet_paid > 0 and sale.customer_id:
+            s.add(WalletTransaction(
+                customer_id=sale.customer_id, amount=-restored_wallet_paid,
+                kind="sale_restore_reversal", reference_type="sale", reference_id=sale.id,
+                note=f"لغو بازپرداخت حذف و بازیابی فاکتور {sale.id}", created_by_id=user.id,
+            ))
 
         restored_item_ids = {}
         for it in data.get("items", []):

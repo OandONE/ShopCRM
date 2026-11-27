@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.full_name }} - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div><h2 class="h3 mb-0"><i class="bi bi-person-vcard"></i> {{ customer.full_name }}</h2><small class="text-body-secondary">حساب مشتری #{{ customer.id }}</small></div>
+  <a href="/customers" class="btn btn-outline-secondary">بازگشت به فهرست</a>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card shadow-sm h-100"><div class="card-body">
+      <div class="text-body-secondary small">موجودی فعلی کیف پول</div>
+      {% if balance < 0 %}
+        <div class="display-6 text-danger fw-bold">{{ '{:,}'.format(balance|abs) }}</div><div class="text-danger">تومان بدهی مشتری</div>
+      {% else %}
+        <div class="display-6 text-success fw-bold">{{ '{:,}'.format(balance) }}</div><div class="text-body-secondary">تومان اعتبار</div>
+      {% endif %}
+    </div></div>
+  </div>
+  <div class="col-md-8">
+    <div class="card shadow-sm h-100"><div class="card-header bg-success text-white">ثبت شارژ کیف پول</div><div class="card-body">
+      <form method="post" action="/api/customers/{{ customer.id }}/topup" class="row g-2 align-items-end">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="col-md-4"><label class="form-label">مبلغ شارژ (تومان)</label><input name="amount" class="form-control" type="number" min="1" step="1" required></div>
+        <div class="col-md-6"><label class="form-label">توضیح</label><input name="note" class="form-control" maxlength="1000" placeholder="مثلاً شارژ حساب مشتری"></div>
+        <div class="col-md-2"><button class="btn btn-success w-100">ثبت شارژ</button></div>
+      </form>
+      <div class="small text-body-secondary mt-2">ثبت شارژ به معنی ثبت دریافت وجه است؛ صحت دریافت وجه توسط ادمین بررسی می‌شود.</div>
+    </div></div>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-secondary text-white">اطلاعات مشتری</div>
+  <div class="card-body">
+    <form method="post" action="/api/customers/{{ customer.id }}/update" class="row g-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="col-md-4"><label class="form-label">نام و نام خانوادگی *</label><input name="full_name" class="form-control" required maxlength="180" value="{{ customer.full_name }}"></div>
+      <div class="col-md-3"><label class="form-label">شماره موبایل</label><input name="phone" class="form-control" maxlength="40" value="{{ customer.phone or '' }}"></div>
+      <div class="col-md-5"><label class="form-label">آدرس</label><input name="address" class="form-control" maxlength="1000" value="{{ customer.address or '' }}"></div>
+      <div class="col-12"><label class="form-label">یادداشت</label><textarea name="notes" class="form-control" rows="2" maxlength="2000">{{ customer.notes or '' }}</textarea></div>
+      <div class="col-12"><button class="btn btn-primary">ذخیره اطلاعات</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-secondary text-white">فاکتورهای متصل به این مشتری</div>
+  <div class="card-body"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+    <thead><tr><th>فاکتور</th><th>تاریخ</th><th>پرداخت نقدی</th><th>پرداخت کیف پول</th></tr></thead>
+    <tbody>
+    {% for sale in sales %}
+      <tr><td><a href="/sales/{{ sale.id }}">#{{ sale.id }}</a></td><td>{{ sale.created_at.strftime('%Y-%m-%d %H:%M') }}</td><td>{% if sale.cash_paid is not none %}{{ '{:,}'.format(sale.cash_paid or 0) }} تومان{% else %}ثبت نشده{% endif %}</td><td>{{ '{:,}'.format(sale.wallet_paid or 0) }} تومان</td></tr>
+    {% else %}<tr><td colspan="4" class="text-center text-body-secondary">فاکتور متصل ثبت نشده است.</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% if sales|length == 30 %}<div class="small text-body-secondary mt-2">حداکثر ۳۰ فاکتور اخیر نمایش داده شده است.</div>{% endif %}
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header bg-dark text-white">تاریخچه تراکنش‌های کیف پول</div>
+  <div class="card-body">
+    <div class="table-responsive"><table class="table table-striped align-middle">
+      <thead><tr><th>تاریخ</th><th>نوع تراکنش</th><th>مبلغ</th><th>توضیح</th><th>ثبت‌کننده</th><th>ارجاع</th></tr></thead>
+      <tbody>
+      {% for tx in transactions %}
+        <tr>
+          <td class="small">{{ tx.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>
+            {% if tx.kind == 'topup' %}شارژ کیف پول
+            {% elif tx.kind == 'sale_payment' %}پرداخت فاکتور
+            {% elif tx.kind == 'sale_return' %}بازپرداخت مرجوعی
+            {% elif tx.kind == 'sale_delete_refund' %}بازگشت وجه حذف فاکتور
+            {% elif tx.kind == 'sale_delete_no_refund' %}حذف فاکتور بدون بازپرداخت
+            {% elif tx.kind == 'sale_restore_reversal' %}لغو بازپرداخت و بازیابی فاکتور
+            {% else %}{{ tx.kind }}{% endif %}
+          </td>
+          <td>
+            {% if tx.amount > 0 %}<span class="text-success fw-bold">+{{ '{:,}'.format(tx.amount) }}</span>
+            {% elif tx.amount < 0 %}<span class="text-danger fw-bold">{{ '{:,}'.format(tx.amount) }}</span>
+            {% else %}<span class="text-body-secondary">۰</span>{% endif %} تومان
+          </td>
+          <td>{{ tx.note or '—' }}</td>
+          <td>{{ actors.get(tx.id, '—') }}</td>
+          <td>{% if tx.reference_type == 'sale' %}<a href="/sales/{{ tx.reference_id }}">فاکتور #{{ tx.reference_id }}</a>{% elif tx.reference_type == 'sale_return' %}مرجوعی #{{ tx.reference_id }}{% else %}—{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-center text-body-secondary py-4">هنوز تراکنشی ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% if transactions|length == 250 %}<div class="small text-body-secondary">حداکثر ۲۵۰ تراکنش اخیر نمایش داده شده است.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

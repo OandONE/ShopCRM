@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}مشتری‌ها و کیف پول - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <h2 class="h3 mb-0"><i class="bi bi-people"></i> مشتری‌ها و کیف پول</h2>
+  {% if current_user.is_owner() %}
+    <a href="/wallet/returns" class="btn btn-outline-warning"><i class="bi bi-arrow-return-left"></i> تعیین تکلیف بازپرداخت مرجوعی‌ها</a>
+  {% endif %}
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-primary text-white">ثبت مشتری جدید</div>
+  <div class="card-body">
+    <form method="post" action="/api/customers/create" class="row g-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="col-md-4">
+        <label class="form-label">نام و نام خانوادگی *</label>
+        <input name="full_name" class="form-control" maxlength="180" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">شماره موبایل</label>
+        <input name="phone" class="form-control" maxlength="40" inputmode="tel">
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">آدرس</label>
+        <input name="address" class="form-control" maxlength="1000">
+      </div>
+      <div class="col-12">
+        <label class="form-label">یادداشت</label>
+        <textarea name="notes" class="form-control" rows="2" maxlength="2000"></textarea>
+      </div>
+      <div class="col-12"><button class="btn btn-primary"><i class="bi bi-person-plus"></i> ثبت مشتری</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header bg-secondary text-white">فهرست مشتری‌ها</div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        <thead class="table-dark"><tr><th>مشتری</th><th>موبایل</th><th>موجودی کیف پول</th><th>وضعیت</th><th></th></tr></thead>
+        <tbody>
+        {% for customer in customers %}
+          {% set balance = balances.get(customer.id, 0) %}
+          <tr>
+            <td><strong>{{ customer.full_name }}</strong></td>
+            <td>{{ customer.phone or '—' }}</td>
+            <td>
+              {% if balance < 0 %}<span class="text-danger fw-bold">{{ '{:,}'.format(balance|abs) }} تومان بدهکار</span>
+              {% else %}<span class="text-success fw-bold">{{ '{:,}'.format(balance) }} تومان</span>{% endif %}
+            </td>
+            <td>{% if customer.is_active %}<span class="badge text-bg-success">فعال</span>{% else %}<span class="badge text-bg-secondary">غیرفعال</span>{% endif %}</td>
+            <td><a class="btn btn-sm btn-outline-primary" href="/customers/{{ customer.id }}">جزئیات و تاریخچه</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="text-center text-body-secondary py-4">هنوز مشتری‌ای ثبت نشده است.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

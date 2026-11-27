@@ -397,6 +397,90 @@
   const invoiceDiscountField = document.getElementById('invoice-discount-amount');
   const invoiceDiscountError = document.getElementById('invoice-discount-error');
 
+  const customerSelect = document.getElementById('invoice-customer-id');
+  const paymentMethodSelect = document.getElementById('invoice-payment-method');
+  const cashPartWrap = document.getElementById('invoice-cash-part-wrap');
+  const cashPartInput = document.getElementById('invoice-cash-part');
+  const customerBalanceEl = document.getElementById('invoice-customer-balance');
+  const cashPreviewEl = document.getElementById('invoice-cash-preview');
+  const walletPreviewEl = document.getElementById('invoice-wallet-preview');
+  const walletWarningEl = document.getElementById('invoice-wallet-warning');
+  const paymentErrorEl = document.getElementById('invoice-payment-error');
+  let customersById = new Map();
+  let paymentValues = {cash: 0, wallet: 0, balanceAfter: 0};
+  let mixedCashTouched = false;
+
+  async function loadInvoiceCustomers() {
+    if (!customerSelect) return;
+    try {
+      const response = await fetch('/api/customers/options');
+      if (!response.ok) throw new Error('بارگذاری مشتری‌ها ناموفق بود');
+      const customers = await response.json();
+      customersById = new Map(customers.map(c => [String(c.id), c]));
+      customerSelect.innerHTML = '<option value="">بدون اتصال به مشتری</option>' + customers.map(c =>
+        `<option value="${c.id}">${escapeHtml(c.full_name)}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}</option>`
+      ).join('');
+      updatePaymentUI();
+    } catch (err) {
+      if (customerBalanceEl) customerBalanceEl.textContent = 'بارگذاری فهرست مشتری‌ها انجام نشد؛ فاکتور نقدی همچنان قابل ثبت است.';
+    }
+  }
+
+  function getPayableNow() {
+    const subtotal = cart.reduce((sum, it) => sum + Math.max(0, Number(it.final_unit_price || 0) * Number(it.quantity || 0) - Number(it.discount_total || 0)), 0);
+    return Math.max(0, subtotal - parseNumber(invoiceDiscountField?.value || '0'));
+  }
+
+  function updatePaymentUI(payable = getPayableNow()) {
+    const method = paymentMethodSelect?.value || 'cash';
+    const customerId = customerSelect?.value || '';
+    const customer = customersById.get(customerId);
+    let cash = 0, wallet = 0;
+    if (method === 'wallet') {
+      wallet = payable;
+    } else if (method === 'mixed') {
+      cashPartWrap?.classList.remove('d-none');
+      if (!mixedCashTouched && cashPartInput) cashPartInput.value = formatNumber(payable);
+      cash = Math.max(0, parseNumber(cashPartInput?.value || '0'));
+      wallet = Math.max(0, payable - cash);
+    } else {
+      cash = payable;
+    }
+    if (method !== 'mixed') cashPartWrap?.classList.add('d-none');
+    const balance = customer ? Number(customer.balance || 0) : 0;
+    const balanceAfter = balance - wallet;
+    paymentValues = {cash, wallet, balanceAfter};
+    if (cashPreviewEl) cashPreviewEl.textContent = formatToman(cash);
+    if (walletPreviewEl) walletPreviewEl.textContent = formatToman(wallet);
+    if (customerBalanceEl) {
+      if (customer) {
+        const debtText = balance < 0 ? `بدهی فعلی: ${formatToman(Math.abs(balance))}` : `موجودی فعلی: ${formatToman(balance)}`;
+        customerBalanceEl.textContent = debtText + (wallet > 0 ? ` · پس از خرید: ${balanceAfter < 0 ? 'بدهی ' + formatToman(Math.abs(balanceAfter)) : formatToman(balanceAfter)}` : '');
+      } else {
+        customerBalanceEl.textContent = wallet > 0 ? 'برای استفاده از کیف پول، مشتری را انتخاب کنید.' : 'برای فاکتور نقدی، انتخاب مشتری اختیاری است.';
+      }
+    }
+    walletWarningEl?.classList.toggle('d-none', !(wallet > 0 && customer && balanceAfter < 0));
+    let error = '';
+    if (cash > payable) error = 'مبلغ نقدی نمی‌تواند از مبلغ قابل پرداخت بیشتر باشد.';
+    else if (wallet > 0 && !customer) error = 'برای پرداخت از کیف پول، انتخاب مشتری الزامی است.';
+    if (paymentErrorEl) paymentErrorEl.textContent = error;
+    return !error;
+  }
+
+  customerSelect?.addEventListener('change', () => updatePaymentUI());
+  paymentMethodSelect?.addEventListener('change', () => {
+    mixedCashTouched = false;
+    updatePaymentUI();
+  });
+  cashPartInput?.addEventListener('input', () => {
+    mixedCashTouched = true;
+    const raw = cashPartInput.value;
+    cashPartInput.value = formatNumber(parseNumber(raw));
+    updatePaymentUI();
+  });
+  loadInvoiceCustomers();
+
   function renderCart() {
     if (cartCountEl) cartCountEl.textContent = cart.length;
     let itemDiscount = 0;
@@ -420,6 +504,7 @@
       submitBtn.disabled = true;
       if (totalDiscountEl) totalDiscountEl.textContent = '۰ تومان';
       if (totalFinalEl) totalFinalEl.textContent = '۰ تومان';
+      updatePaymentUI(0);
       return;
     }
 
@@ -452,6 +537,7 @@
 
     if (totalDiscountEl) totalDiscountEl.textContent = formatToman(itemDiscount + invoiceDiscount);
     if (totalFinalEl) totalFinalEl.textContent = formatToman(payable);
+    updatePaymentUI(payable);
   }
   if (invoiceDiscountField) {
     invoiceDiscountField.addEventListener('input', () => {
@@ -491,7 +577,11 @@
 
     const invoiceDiscountAmount = parseNumber(invoiceDiscountField?.value || '0');
     const payableAmount = Math.max(0, currentSubtotal - invoiceDiscountAmount);
-    const confirmMessage = `فاکتور ${cart.length} قلمی با مبلغ ${formatNumber(payableAmount)} تومان ثبت شود؟`;
+    if (!updatePaymentUI(payableAmount)) return alert(paymentErrorEl?.textContent || 'اطلاعات پرداخت نامعتبر است.');
+    const paymentSummary = `نقدی: ${formatNumber(paymentValues.cash)} تومان، کیف پول: ${formatNumber(paymentValues.wallet)} تومان`;
+    const debtSummary = paymentValues.wallet > 0 && paymentValues.balanceAfter < 0
+      ? `\nهشدار: موجودی کیف پول منفی و بدهی ${formatNumber(Math.abs(paymentValues.balanceAfter))} تومان خواهد شد؛ ادمین باید آن را بررسی کند.` : '';
+    const confirmMessage = `فاکتور ${cart.length} قلمی با مبلغ ${formatNumber(payableAmount)} تومان ثبت شود؟\n${paymentSummary}${debtSummary}`;
     if (!window.confirm(confirmMessage)) return;
 
     const saleValues = {};
@@ -502,6 +592,10 @@
 
     const payload = {
       source: KIND,
+      customer_id: customerSelect?.value || null,
+      payment_method: paymentMethodSelect?.value || 'cash',
+      cash_paid: paymentValues.cash,
+      wallet_paid: paymentValues.wallet,
       sale_values: saleValues,
       items: cart.map(it => ({
         product_id: it.product_id,
@@ -537,6 +631,10 @@
         throw new Error(err);
       }
       const data = await res.json();
+      if (paymentValues.wallet > 0 && customerSelect?.value && data.wallet_balance_after != null) {
+        const chosenCustomer = customersById.get(String(customerSelect.value));
+        if (chosenCustomer) chosenCustomer.balance = Number(data.wallet_balance_after);
+      }
       cart = [];
       saveCart();
       if (invoiceDiscountField) invoiceDiscountField.value = '0';
@@ -545,6 +643,9 @@
       submitting = false;
       submitBtn.disabled = false;
       window.open(data.invoice_url, '_blank');
+      if (data.wallet_warning) {
+        alert(`فاکتور ثبت شد. موجودی کیف پول «${data.wallet_customer || 'مشتری'}» منفی شد و به ${formatNumber(Math.abs(Number(data.wallet_balance_after || 0)))} تومان بدهی رسید. ادمین باید صحت این بدهی را بررسی کند.`);
+      }
       if (Array.isArray(data.stock_warnings) && data.stock_warnings.length) {
         const details = data.stock_warnings.map(w =>
           `«${w.product_name}»: موجودی ${formatNumber(w.previous_stock)}، فروش ${formatNumber(w.sold_quantity)}، موجودی نهایی ${formatNumber(w.new_stock)}`

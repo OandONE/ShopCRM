@@ -134,6 +134,33 @@ class Column(SQLModel, table=True):
     scope: str = "sale"  # "sale" | "item"
 
 
+# Customers and immutable wallet ledger
+
+class Customer(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    full_name: str = Field(index=True)
+    phone: Optional[str] = Field(default=None, index=True)
+    address: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: bool = True
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+
+
+class WalletTransaction(SQLModel, table=True):
+    """Append-only wallet ledger. Positive amounts credit the wallet; negative amounts debit it."""
+    id: int = Field(default=None, primary_key=True)
+    customer_id: int = Field(foreign_key="customer.id", index=True)
+    amount: int
+    kind: str = Field(index=True)
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+    note: Optional[str] = None
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
+
+
 # Sales & Items
 
 class Sale(SQLModel, table=True):
@@ -141,8 +168,11 @@ class Sale(SQLModel, table=True):
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
     created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     note: Optional[str] = None
-    
     discount_amount: int = 0
+    customer_id: Optional[int] = Field(default=None, foreign_key="customer.id", index=True)
+    # None means an older invoice created before payment tracking was introduced
+    cash_paid: Optional[int] = None
+    wallet_paid: int = 0
 
 
 class SaleValue(SQLModel, table=True):
@@ -200,6 +230,10 @@ class SaleReturn(SQLModel, table=True):
     accepted_by_seller: bool = True
     created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
+    # NULL = awaiting owner decision; allowed values are "cash" and "wallet"
+    refund_method: Optional[str] = None
+    approved_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    approved_at: Optional[NaiveDatetime] = None
 
 
 class SaleReturnItem(SQLModel, table=True):

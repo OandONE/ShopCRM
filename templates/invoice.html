@@ -17,6 +17,10 @@
     </div>
   </header>
 
+  {% if customer %}
+    <div class="invoice-extras"><strong>مشتری:</strong> {{ customer.full_name }}{% if customer.phone %} · {{ customer.phone }}{% endif %}</div>
+  {% endif %}
+
   <table class="invoice-table">
     <thead>
       <tr>
@@ -61,6 +65,11 @@
       <div class="discount">تخفیف کل: {{ "{:,}".format(total_discount) }} تومان</div>
     {% endif %}
     <div class="amount">مبلغ قابل پرداخت: {{ "{:,}".format(total_final) }} تومان</div>
+    {% if cash_paid is not none or wallet_paid > 0 %}
+      <div class="small mt-2">پرداخت نقدی: {{ "{:,}".format(cash_paid or 0) }} تومان · پرداخت از کیف پول: {{ "{:,}".format(wallet_paid) }} تومان</div>
+    {% else %}
+      <div class="small mt-2">روش پرداخت در سوابق قدیمی ثبت نشده است.</div>
+    {% endif %}
     <div class="words">{{ total_words }}</div>
   </div>
 

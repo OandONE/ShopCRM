@@ -17,12 +17,27 @@
     <a href="/sales" class="btn btn-outline-secondary">
       <i class="bi bi-arrow-right"></i> بازگشت
     </a>
-    <form method="POST" action="/api/sale/delete"
-          onsubmit="return confirm('این فاکتور و تمام اقلامش حذف و بایگانی شود؟')">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="sale_id" value="{{ data.id }}">
-      <button class="btn btn-danger"><i class="bi bi-trash"></i> حذف</button>
-    </form>
+    {% if data.wallet_paid > 0 and not current_user.is_owner() %}
+      <span class="small text-body-secondary">حذف فاکتور دارای پرداخت کیف پول فقط با تصمیم مالک انجام می‌شود.</span>
+    {% else %}
+      <form method="POST" action="/api/sale/delete"
+            onsubmit="return confirm('این فاکتور و تمام اقلامش حذف و بایگانی شود؟')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="sale_id" value="{{ data.id }}">
+        {% if data.wallet_paid > 0 and current_user.is_owner() %}
+          <label class="small d-block mb-1"><input type="checkbox" name="refund_wallet"> بازگرداندن {{ '{:,}'.format(data.wallet_paid) }} تومان به کیف پول مشتری</label>
+        {% endif %}
+        <button class="btn btn-danger"><i class="bi bi-trash"></i> حذف</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body row g-3">
+    <div class="col-md-4"><small class="text-body-secondary">مشتری</small><div class="fw-semibold">{% if data.customer %}<a href="/customers/{{ data.customer.id }}">{{ data.customer.full_name }}</a>{% else %}بدون مشتری متصل{% endif %}</div></div>
+    <div class="col-md-4"><small class="text-body-secondary">پرداخت نقدی</small><div class="fw-semibold">{% if data.cash_paid is not none %}{{ '{:,}'.format(data.cash_paid or 0) }} تومان{% else %}در سوابق ثبت نشده{% endif %}</div></div>
+    <div class="col-md-4"><small class="text-body-secondary">پرداخت از کیف پول</small><div class="fw-semibold">{{ '{:,}'.format(data.wallet_paid) }} تومان</div></div>
   </div>
 </div>
 

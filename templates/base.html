@@ -16,6 +16,9 @@
       :focus-visible{outline:3px solid #0d6efd!important;outline-offset:2px}
       .product-item[aria-selected="true"]{background:var(--bs-primary-bg-subtle);outline:2px solid var(--bs-primary);outline-offset:-2px}
       .keyboard-hint{font-size:.8rem;color:var(--bs-secondary-color)}
+      .navbar .dropdown-menu{min-width:13rem}
+      .navbar .dropdown-item{padding:.55rem 1rem}
+      .navbar .dropdown-item i{width:1.35rem;display:inline-block}
     </style>
     <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </head>
@@ -29,59 +32,102 @@
     </button>
     <div class="collapse navbar-collapse" id="nav">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        {% if current_user %}
         <li class="nav-item"><a class="nav-link" href="/"><i class="bi bi-house"></i> داشبورد</a></li>
-        {% if current_user and current_user.has_permission('quick_sale') %}
-        <li class="nav-item"><a class="nav-link" href="/quick"><i class="bi bi-lightning-charge"></i> سریع</a></li>
-        {% endif %}
-        {% if current_user and current_user.has_permission('full_sale') %}
-        <li class="nav-item"><a class="nav-link" href="/full"><i class="bi bi-pencil-square"></i> کامل</a></li>
-        {% endif %}
-        {% if current_user and current_user.has_permission('search') %}
+
+        {# فروش، فاکتورها و مرجوعی‌ها #}
+        {% if current_user.has_permission('quick_sale') or current_user.has_permission('full_sale') or current_user.has_permission('view_sales') %}
         <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="salesMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-receipt"></i> فروش و فاکتورها
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="salesMenu">
+            {% if current_user.has_permission('quick_sale') %}
+            <li><a class="dropdown-item" href="/quick"><i class="bi bi-lightning-charge"></i> ثبت فروش سریع</a></li>
+            {% endif %}
+            {% if current_user.has_permission('full_sale') %}
+            <li><a class="dropdown-item" href="/full"><i class="bi bi-pencil-square"></i> ثبت فروش کامل</a></li>
+            {% endif %}
+            {% if current_user.has_permission('view_sales') %}
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="/sales"><i class="bi bi-receipt-cutoff"></i> فهرست فروش‌ها</a></li>
+            <li><a class="dropdown-item" href="/returns"><i class="bi bi-arrow-return-left"></i> مرجوعی‌ها</a></li>
+            {% endif %}
+          </ul>
+        </li>
+        {% endif %}
+
+        {# جستجوی کالا و جستجوی پیشرفته #}
+        {% if current_user.has_permission('search') %}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="searchMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="bi bi-search"></i> جستجو
           </a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="/product-search"><i class="bi bi-search"></i> جستجوی کالا</a></li>
+          <ul class="dropdown-menu" aria-labelledby="searchMenu">
+            <li><a class="dropdown-item" href="/product-search"><i class="bi bi-upc-scan"></i> جستجوی کالا</a></li>
             <li><a class="dropdown-item" href="/search"><i class="bi bi-sliders"></i> جستجوی پیشرفته</a></li>
           </ul>
         </li>
         {% endif %}
-        {% if current_user and current_user.has_permission('view_reports') %}
-        <li class="nav-item"><a class="nav-link" href="/reports"><i class="bi bi-graph-up"></i> گزارش</a></li>
-        <li class="nav-item"><a class="nav-link" href="/analytics"><i class="bi bi-bar-chart-line"></i> تحلیل پیشرفته</a></li>
+
+        {# مشتریان و کیف پول #}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="customersMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-people"></i> مشتریان و کیف پول
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="customersMenu">
+            <li><a class="dropdown-item" href="/customers"><i class="bi bi-person-lines-fill"></i> فهرست مشتریان و کیف پول‌ها</a></li>
+            {% if current_user.is_owner() %}
+            <li><a class="dropdown-item" href="/wallet/returns"><i class="bi bi-wallet2"></i> تعیین تکلیف بازپرداخت‌ها</a></li>
+            {% endif %}
+          </ul>
+        </li>
+
+        {# گزارش‌ها #}
+        {% if current_user.has_permission('view_reports') %}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="reportsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-graph-up"></i> گزارش‌ها
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="reportsMenu">
+            <li><a class="dropdown-item" href="/reports"><i class="bi bi-graph-up"></i> گزارش فروش</a></li>
+            <li><a class="dropdown-item" href="/analytics"><i class="bi bi-bar-chart-line"></i> تحلیل پیشرفته</a></li>
+          </ul>
+        </li>
         {% endif %}
-        {% if current_user and current_user.has_permission('view_sales') %}
-        <li class="nav-item"><a class="nav-link" href="/sales"><i class="bi bi-receipt"></i> فروش‌ها</a></li>
-        <li class="nav-item"><a class="nav-link" href="/returns"><i class="bi bi-arrow-return-left"></i> مرجوعی‌ها</a></li>
-        {% endif %}
-        {% if current_user and (current_user.has_permission('manage_columns') or current_user.has_permission('manage_products') or current_user.has_permission('view_current_columns') or current_user.has_permission('view_sales')) %}
+
+        {# مدیریت محصولات، ستون‌ها و تنظیمات عملیاتی #}
+        {% if current_user.has_permission('manage_columns') or current_user.has_permission('manage_products') or current_user.has_permission('view_current_columns') or current_user.has_permission('view_sales') %}
         <li class="nav-item"><a class="nav-link" href="/admin"><i class="bi bi-gear"></i> مدیریت</a></li>
         {% endif %}
-        {% if current_user and current_user.is_owner() %}
+
+        {# امکانات مخصوص مالک #}
+        {% if current_user.is_owner() %}
         <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="ownerMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="bi bi-shield-lock"></i> پنل مالک
           </a>
-          <ul class="dropdown-menu">
+          <ul class="dropdown-menu" aria-labelledby="ownerMenu">
             <li><a class="dropdown-item" href="/owner"><i class="bi bi-speedometer2"></i> داشبورد مالک</a></li>
             <li><a class="dropdown-item" href="/owner/users"><i class="bi bi-people"></i> مدیریت ادمین‌ها</a></li>
+            <li><a class="dropdown-item" href="/owner/users/new"><i class="bi bi-person-plus"></i> افزودن ادمین جدید</a></li>
             <li><a class="dropdown-item" href="/owner/audit"><i class="bi bi-journal-text"></i> لاگ فعالیت‌ها</a></li>
             <li><a class="dropdown-item" href="/owner/deleted-sales"><i class="bi bi-trash"></i> فروش‌های حذف‌شده</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="/owner/settings"><i class="bi bi-shop"></i> تنظیمات فروشگاه</a></li>
-            <li><a class="dropdown-item" href="/backup"><i class="bi bi-hdd"></i> بک‌آپ</a></li>
+            <li><a class="dropdown-item" href="/backup"><i class="bi bi-hdd"></i> پشتیبان‌گیری</a></li>
           </ul>
         </li>
         {% endif %}
-        {% if current_user %}
+
         <li class="nav-item"><a class="nav-link" href="/shortcuts"><i class="bi bi-keyboard"></i> راهنمای میانبرها</a></li>
         {% endif %}
       </ul>
+
       <ul class="navbar-nav mb-2 mb-lg-0">
         {% if current_user %}
         <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="bi bi-person-circle"></i>
             {{ current_user.full_name or current_user.username }}
             {% if current_user.is_owner() %}<span class="badge text-bg-warning">مالک</span>{% endif %}
@@ -93,7 +139,7 @@
         </li>
         {% endif %}
         <li class="nav-item">
-          <button class="btn btn-outline-light btn-sm ms-2" onclick="toggleTheme()" title="تغییر تم">
+          <button class="btn btn-outline-light btn-sm ms-2" onclick="toggleTheme()" title="تغییر تم" aria-label="تغییر تم">
             <i class="bi bi-moon-stars" id="theme-icon"></i>
           </button>
         </li>

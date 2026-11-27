@@ -3,7 +3,10 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
   <h2 class="h3 mb-0"><i class="bi bi-arrow-return-left"></i> مرجوعی فاکتور #{{ sale.id }}</h2>
-  <a href="/returns" class="btn btn-outline-secondary">فهرست فاکتورها</a>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if current_user.is_owner() %}<a href="/wallet/returns" class="btn btn-outline-warning">تعیین بازپرداخت‌ها</a>{% endif %}
+    <a href="/returns" class="btn btn-outline-secondary">فهرست فاکتورها</a>
+  </div>
 </div>
 <div class="alert alert-info">
   تصمیم قبول مرجوعی با فروشنده است. برای هر قلم، تعداد دریافتی و تعداد قابل برگشت به موجودی را جداگانه وارد کنید. تعداد باقی‌مانده را می‌توان در مراجعات بعدی مرجوع کرد.
@@ -86,6 +89,11 @@
           <strong class="text-success">بازپرداخت: {{ '{:,}'.format(ret.total_refund) }} تومان</strong>
         </div>
         <div class="small text-body-secondary mt-1">ثبت‌کننده: {{ ret.actor }}{% if ret.note %} · توضیح: {{ ret.note }}{% endif %}</div>
+        <div class="small mt-1">
+          {% if ret.refund_method == 'wallet' %}<span class="badge text-bg-success">به کیف پول برگشت داده شد</span>
+          {% elif ret.refund_method == 'cash' %}<span class="badge text-bg-primary">بازپرداخت خارج از کیف پول ثبت شد</span>
+          {% else %}<span class="badge text-bg-warning">در انتظار تصمیم ادمین برای روش بازپرداخت</span>{% endif %}
+        </div>
         <ul class="mb-0 mt-2">
           {% for it in ret["items"] %}
             <li>{{ it.quantity }} عدد «{{ it.name }}»؛ برگشت به موجودی: {{ it.restock_quantity }} عدد؛ خارج از موجودی قابل فروش: {{ it.quantity - it.restock_quantity }} عدد؛ کسر ثبت‌شده: {{ it.deduction_percent }}٪؛ بازپرداخت: {{ '{:,}'.format(it.refund_amount) }} تومان</li>

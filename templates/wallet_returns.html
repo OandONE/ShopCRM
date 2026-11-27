@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}تعیین روش بازپرداخت - ShopCRM{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <h2 class="h3 mb-0"><i class="bi bi-wallet2"></i> تعیین روش بازپرداخت مرجوعی‌ها</h2>
+  <a href="/customers" class="btn btn-outline-secondary">مشتری‌ها و کیف پول</a>
+</div>
+<div class="alert alert-info">مرجوعی پس از تأیید فروشنده در این فهرست قرار می‌گیرد. فقط مالک می‌تواند مشخص کند مبلغ به کیف پول مشتری اضافه شود یا به‌صورت نقدی/خارج از کیف پول پرداخت شود.</div>
+<div class="card shadow-sm"><div class="card-body">
+  {% for row in rows %}
+    <div class="border rounded p-3 mb-3">
+      <div class="d-flex justify-content-between flex-wrap gap-2">
+        <strong>مرجوعی #{{ row.return.id }} · فاکتور #{{ row.return.sale_id }}</strong>
+        <strong class="text-success">{{ '{:,}'.format(row.return.total_refund) }} تومان</strong>
+      </div>
+      <div class="small text-body-secondary mt-2">
+        مشتری: {{ row.customer.full_name if row.customer else 'فاکتور بدون مشتری' }}
+        {% if row.customer and row.customer.phone %} · {{ row.customer.phone }}{% endif %}
+        · تاریخ: {{ row.return.created_at.strftime('%Y-%m-%d %H:%M') }}
+      </div>
+      {% if row.return.note %}<div class="mt-2">توضیح: {{ row.return.note }}</div>{% endif %}
+      <form method="post" action="/api/owner/wallet-returns/{{ row.return.id }}/approve" class="row g-2 align-items-end mt-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="col-md-4">
+          <label class="form-label">روش بازپرداخت</label>
+          <select class="form-select" name="refund_method" required>
+            <option value="cash">نقدی / خارج از کیف پول</option>
+            <option value="wallet" {% if not row.customer %}disabled{% endif %}>افزودن به کیف پول مشتری</option>
+          </select>
+        </div>
+        <div class="col-md-4 small text-body-secondary">{% if row.customer %}موجودی فعلی کیف پول: در صفحه مشتری قابل مشاهده است. مبلغ بازپرداخت به موجودی فعلی اضافه می‌شود و ابتدا بدهی را کاهش می‌دهد.{% else %}این فاکتور مشتری متصل ندارد؛ فقط بازپرداخت نقدی قابل انتخاب است.{% endif %}</div>
+        <div class="col-md-4"><button class="btn btn-primary w-100" onclick="return confirm('روش بازپرداخت این مرجوعی ثبت شود؟')">ثبت تصمیم ادمین</button></div>
+      </form>
+    </div>
+  {% else %}
+    <div class="text-center text-body-secondary py-5">مرجوعی در انتظار تصمیم وجود ندارد.</div>
+  {% endfor %}
+</div></div>
+{% endblock %}
