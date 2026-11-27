@@ -57,6 +57,11 @@ ShopCRM برای فروشگاه‌های کوچک و محلی طراحی شده 
 
 ![Product Search](screenshots/simple-search.png)
 
+### جستجوی پیشرفته
+جستجوی ترکیبی و پیشرفته روی فاکتورها و اقلام با فیلترهای AND / OR / NOT.
+
+![Full Search](screenshots/full-search.png)
+
 ### گزارش
 گزارش‌ها و نمودارهای آماری فروش.
 
@@ -68,12 +73,37 @@ ShopCRM برای فروشگاه‌های کوچک و محلی طراحی شده 
 ![Returns](screenshots/returns.png)
 ![Return Details](screenshots/return.png)
 
+### کیف پول و مرجوعی
+مدیریت کیف پول مشتریان و ارتباط آن با مرجوعی‌ها.
+
+![Wallet Returns](screenshots/wallet-returns.png)
+
+### مشتریان
+مدیریت مشتریان، مشاهده جزئیات و کیف پول.
+
+![Customers](screenshots/customers.png)
+
+### دسته‌بندی کالا
+مدیریت دسته‌بندی محصولات و اختصاص کالاها به دسته‌ها.
+
+![Categories](screenshots/categories.png)
+
 ### پنل مدیریت
 مدیریت محصولات، ستون‌های سفارشی و تنظیمات برنامه.
 
 ![Management](screenshots/manager-1.png)
 ![Management](screenshots/manager-2.png)
 ![Management](screenshots/manager-3.png)
+
+### مدیریت ادمین‌ها
+مشاهده و مدیریت کاربران ادمین.
+
+![Admins](screenshots/admins.png)
+
+### ایجاد ادمین جدید
+فرم ایجاد کاربر ادمین جدید با تنظیم دسترسی‌ها.
+
+![Create Admin](screenshots/create-admin.png)
 
 ## پنل آنالیز
 
@@ -83,6 +113,27 @@ ShopCRM برای فروشگاه‌های کوچک و محلی طراحی شده 
 مدیریت کاربران، دسترسی‌ها و تنظیمات مالک.
 
 ![Owner Panel](screenshots/owner_panel.png)
+![Owner Panel](screenshots/owner-panel.png)
+
+### تنظیمات فروشگاه
+تنظیم نام فروشگاه، اطلاعات تماس، واحد پول و سایر تنظیمات.
+
+![Shop Settings](screenshots/shop-settings.png)
+
+### لاگ فعالیت‌ها
+مشاهده لاگ کامل عملیات انجام‌شده در سیستم.
+
+![Logs](screenshots/logs.png)
+
+### بک‌آپ و بازیابی
+دانلود و بازیابی دیتابیس (فقط برای Owner).
+
+![Backup Restore](screenshots/backup-restore.png)
+
+### میانبرهای صفحه‌کلید
+نمایش میانبرهای قراردادی برای کار سریع‌تر بدون ماوس.
+
+![Shortcuts](screenshots/shortcuts.png)
 
 ---
 
