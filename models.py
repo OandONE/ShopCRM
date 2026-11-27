@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field
+from sqlalchemy import UniqueConstraint
 from pydantic import NaiveDatetime
 from typing import Optional
 from datetime import datetime, timezone
@@ -96,6 +97,25 @@ class Product(SQLModel, table=True):
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
     created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     updated_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+
+class Category(SQLModel, table=True):
+    """Product category managed by the store owner"""
+    id: int = Field(default=None, primary_key=True)
+    name: str = Field(unique=True, index=True, max_length=100)
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    updated_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+
+class ProductCategoryLink(SQLModel, table=True):
+    """Many-to-many link between products and categories"""
+    __table_args__ = (UniqueConstraint("product_id", "category_id", name="uq_product_category"),)
+
+    id: int = Field(default=None, primary_key=True)
+    product_id: int = Field(foreign_key="product.id", index=True)
+    category_id: int = Field(foreign_key="category.id", index=True)
 
 
 class ProductPriceHistory(SQLModel, table=True):

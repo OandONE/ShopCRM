@@ -7,7 +7,7 @@ from sqlmodel import SQLModel, Session, create_engine, select, func
 from sqlalchemy import Float, cast, desc, update as sa_update
 from models import (
     User, UserSession, StoreSettings, AuditLog,
-    Column, Product, ProductPriceHistory, InventoryMovement,
+    Column, Product, Category, ProductCategoryLink, ProductPriceHistory, InventoryMovement,
     Sale, SaleValue, SaleItem, SaleItemValue, DeletedSale,
     SaleReturn, SaleReturnItem, SavedAnalysis, Customer, WalletTransaction,
 )
@@ -16,7 +16,7 @@ from rate_limit import RateLimiter
 from audit import write_audit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3, re
+import uvicorn, hashlib, hmac, secrets, io, csv, os, json, sqlite3, re, unicodedata
 from html import escape as html_escape
 from pathlib import Path
 from sqlalchemy.engine import URL
@@ -594,6 +594,91 @@ def _escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
 
 
+_PERSIAN_ALPHABET = "ا آ ب پ ت ث ج چ ح خ د ذ ر ز ژ س ش ص ض ط ظ ع غ ف ق ک گ ل م ن و ه ی"
+_PERSIAN_SORT_ORDER = {char: index for index, char in enumerate(_PERSIAN_ALPHABET.replace(" ", ""))}
+_PERSIAN_SEARCH_REPLACEMENTS = (
+    ("آ", "ا"), ("ي", "ی"), ("ى", "ی"), ("ئ", "ی"),
+    ("ك", "ک"), ("أ", "ا"), ("إ", "ا"), ("ٱ", "ا"),
+)
+_PERSIAN_CHAR_TRANSLATION = str.maketrans(dict(_PERSIAN_SEARCH_REPLACEMENTS))
+
+
+def _normalize_product_search(value: str) -> str:
+    """Normalize Arabic/Persian character variants for product search"""
+    text = unicodedata.normalize("NFKC", str(value or "")).translate(_PERSIAN_CHAR_TRANSLATION).casefold()
+    normalized = []
+    for char in text:
+        if char == "ـ" or char in {"\u200c", "\u200d", "\u2060", "\ufeff"}:
+            continue
+        if unicodedata.category(char) == "Mn":
+            continue
+        normalized.append(char)
+    return "".join(normalized).strip()
+
+
+def _persian_product_sort_key(value: str) -> tuple[int, ...]:
+    """Return a stable Persian-alphabet sort key (with other chars after Persian)"""
+    normalized = _normalize_product_search(value)
+    return tuple(
+        _PERSIAN_SORT_ORDER[char] if char in _PERSIAN_SORT_ORDER else 1000 + ord(char)
+        for char in normalized
+    )
+
+
+def _normalized_product_name_sql():
+    """SQLite expression mirroring the important character normalization rules"""
+    expression = Product.name
+    for source, target in _PERSIAN_SEARCH_REPLACEMENTS:
+        expression = func.replace(expression, source, target)
+    removable = ["ـ", "\u200c", "\u200d", "\u2060", "\ufeff"]
+    removable.extend(chr(codepoint) for codepoint in range(0x064B, 0x0660))
+    removable.extend(["\u0670"])
+    removable.extend(chr(codepoint) for codepoint in range(0x06D6, 0x06EE))
+    for character in removable:
+        expression = func.replace(expression, character, "")
+    return expression
+
+
+def _read_category_ids(form) -> list[int]:
+    """Read and validate repeated category_ids form fields"""
+    raw_ids = form.getlist("category_ids") if hasattr(form, "getlist") else []
+    ids: list[int] = []
+    for raw in raw_ids:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        try:
+            category_id = int(value)
+        except ValueError as exc:
+            raise HTTPException(400, "شناسه دسته‌بندی نامعتبر است") from exc
+        if category_id not in ids:
+            ids.append(category_id)
+    return ids
+
+
+def _validate_category_ids(session: Session, category_ids: list[int]) -> None:
+    if not category_ids:
+        return
+    found = session.exec(select(Category.id).where(Category.id.in_(category_ids))).all()
+    if len(found) != len(category_ids):
+        raise HTTPException(400, "یک یا چند دسته‌بندی انتخاب‌شده وجود ندارد")
+
+
+def _replace_product_categories(session: Session, product_id: int, category_ids: list[int]) -> None:
+    existing = session.exec(
+        select(ProductCategoryLink).where(ProductCategoryLink.product_id == product_id)
+    ).all()
+    existing_by_category = {link.category_id: link for link in existing}
+    requested_ids = set(category_ids)
+
+    for category_id, link in existing_by_category.items():
+        if category_id not in requested_ids:
+            session.delete(link)
+
+    for category_id in sorted(requested_ids - set(existing_by_category)):
+        session.add(ProductCategoryLink(product_id=product_id, category_id=category_id))
+
+
 def _to_int(v):
     try:
         return int(float(str(v)))
@@ -967,6 +1052,16 @@ def admin_page(request: Request, user: User = Depends(require_user)):
         columns = _get_columns(s) if (user.has_permission("view_current_columns")
                                        or user.has_permission("manage_columns")) else []
         products = s.exec(select(Product).order_by(Product.name)).all() if user.has_permission("manage_products") else []
+        categories = s.exec(select(Category)).all() if user.has_permission("manage_products") else []
+        categories.sort(key=lambda category: _persian_product_sort_key(category.name))
+        product_ids = [p.id for p in products]
+        product_category_ids: dict[int, list[int]] = {pid: [] for pid in product_ids}
+        if product_ids:
+            links = s.exec(
+                select(ProductCategoryLink).where(ProductCategoryLink.product_id.in_(product_ids))
+            ).all()
+            for link in links:
+                product_category_ids.setdefault(link.product_id, []).append(link.category_id)
         store_settings = s.exec(select(StoreSettings)).first()
         return_deduction_percent = store_settings.return_deduction_percent if store_settings else 15
         product_creators = {}
@@ -975,7 +1070,15 @@ def admin_page(request: Request, user: User = Depends(require_user)):
                 u = s.get(User, p.created_by_id)
                 if u:
                     product_creators[p.id] = u.username
+        category_options = [{"id": c.id, "name": c.name} for c in categories]
+        category_names = {c.id: c.name for c in categories}
+        product_category_names = {
+            pid: [category_names[cid] for cid in ids if cid in category_names]
+            for pid, ids in product_category_ids.items()
+        }
     return render(request, "admin.html", columns=columns, products=products,
+                  categories=category_options, product_category_ids=product_category_ids,
+                  product_category_names=product_category_names,
                   product_creators=product_creators,
                   return_deduction_percent=return_deduction_percent,
                   can_view_purchase_cost=user.has_permission("view_purchase_cost"))
@@ -1532,13 +1635,29 @@ def price_to_words(price: str = "", user: User = Depends(require_user)):
 
 @app.get("/api/search-products")
 def search_products(q: str = "", user: User = Depends(require_user)):
+    normalized_query = _normalize_product_search(q)
     with Session(engine) as s:
         stmt = select(Product).where(Product.is_active == True)  # type: ignore
-        if q:
-            stmt = stmt.where(Product.name.like(f"%{_escape_like(q)}%", escape="\\"))
-        products = s.exec(stmt.order_by(Product.name).limit(30)).all()
-        return [{"id": p.id, "name": p.name, "price": p.price,
-                 "stock_quantity": p.stock_quantity} for p in products]
+        if normalized_query:
+            stmt = stmt.where(
+                _normalized_product_name_sql().like(
+                    f"%{_escape_like(normalized_query)}%", escape="\\"
+                )
+            )
+        products = s.exec(stmt).all()
+
+    matches = []
+    for product in products:
+        normalized_name = _normalize_product_search(product.name)
+        if normalized_query and normalized_query not in normalized_name:
+            continue
+        # Prefix matches are always shown before matches found later in the name
+        prefix_rank = 0 if normalized_query and normalized_name.startswith(normalized_query) else 1
+        matches.append((prefix_rank, _persian_product_sort_key(product.name), product))
+
+    matches.sort(key=lambda row: (row[0], row[1]))
+    return [{"id": p.id, "name": p.name, "price": p.price,
+             "stock_quantity": p.stock_quantity} for _, _, p in matches[:30]]
 
 
 # API: columns (by virtual item fields)
@@ -2131,12 +2250,14 @@ async def add_product(request: Request, user: User = Depends(require_permission(
     purchase_price = (_parse_optional_amount(form.get("purchase_price"), "قیمت خرید")
                       if user.has_permission("view_purchase_cost") else None)
     initial_stock = _parse_stock_value(form.get("stock_quantity", "0"), "موجودی اولیه")
+    category_ids = _read_category_ids(form)
     if initial_stock < 0:
         raise HTTPException(400, "موجودی اولیه نمی‌تواند منفی باشد")
     if not name:
         raise HTTPException(400, "نام محصول الزامی است")
 
     with Session(engine) as s:
+        _validate_category_ids(s, category_ids)
         if s.exec(select(Product).where(Product.name == name)).first():
             raise HTTPException(400, f"محصول «{name}» قبلاً وجود دارد")
         p = Product(name=name, price=price, purchase_price=purchase_price,
@@ -2145,6 +2266,7 @@ async def add_product(request: Request, user: User = Depends(require_permission(
         s.add(p)
         s.flush()
         pid = p.id
+        _replace_product_categories(s, pid, category_ids)
         if initial_stock:
             s.add(InventoryMovement(
                 product_id=pid, quantity_change=initial_stock,
@@ -2155,7 +2277,8 @@ async def add_product(request: Request, user: User = Depends(require_permission(
 
     write_audit(engine, request, "product.create", user=user, target_type="product", target_id=pid,
                 metadata_json=json.dumps({"name": name, "price": price,
-                                          "initial_stock": initial_stock}, ensure_ascii=False))
+                                          "initial_stock": initial_stock,
+                                          "category_ids": category_ids}, ensure_ascii=False))
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -2168,6 +2291,7 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
     new_purchase_price = (_parse_optional_amount(form.get("purchase_price"), "قیمت خرید")
                          if user.has_permission("view_purchase_cost") else None)
     new_stock = _parse_stock_value(form.get("stock_quantity", "0"))
+    category_ids = _read_category_ids(form)
     if not new_name:
         raise HTTPException(400, "نام محصول الزامی است")
 
@@ -2175,6 +2299,7 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
         p = s.get(Product, pid)
         if not p:
             raise HTTPException(404, "محصول پیدا نشد")
+        _validate_category_ids(s, category_ids)
         dup = s.exec(select(Product).where(Product.name == new_name, Product.id != pid)).first()
         if dup:
             raise HTTPException(400, f"محصول دیگری با نام «{new_name}» وجود دارد")
@@ -2195,6 +2320,7 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
         p.updated_at = utcnow()
         p.updated_by_id = user.id
         s.add(p)
+        _replace_product_categories(s, pid, category_ids)
 
         if price_changed or purchase_changed:
             s.add(ProductPriceHistory(
@@ -2215,7 +2341,8 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
 
     write_audit(engine, request, "product.update", user=user, target_type="product", target_id=pid,
                 metadata_json=json.dumps({"stock_delta": stock_delta,
-                                          "purchase_price_changed": purchase_changed}, ensure_ascii=False))
+                                          "purchase_price_changed": purchase_changed,
+                                          "category_ids": category_ids}, ensure_ascii=False))
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -2339,6 +2466,105 @@ def owner_dashboard(request: Request, user: User = Depends(require_owner)):
         deleted_count = s.exec(select(func.count(DeletedSale.id))).one()
     return render(request, "owner/dashboard.html",
                   users_count=users_count, audit_count=audit_count, deleted_count=deleted_count)
+
+
+@app.get("/owner/categories", response_class=HTMLResponse)
+def owner_categories(request: Request, user: User = Depends(require_owner)):
+    with Session(engine) as s:
+        categories = s.exec(select(Category)).all()
+        categories.sort(key=lambda category: _persian_product_sort_key(category.name))
+        counts = {}
+        for category in categories:
+            counts[category.id] = s.exec(
+                select(func.count(ProductCategoryLink.id)).where(
+                    ProductCategoryLink.category_id == category.id
+                )
+            ).one()
+    return render(request, "owner/categories.html", categories=categories,
+                  category_product_counts=counts,
+                  page_error=request.query_params.get("error", ""))
+
+
+@app.post("/api/owner/categories/add")
+async def owner_category_add(request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    name = str(form.get("name", "")).strip()
+    if not name:
+        raise HTTPException(400, "نام دسته‌بندی الزامی است")
+    if len(name) > 100:
+        raise HTTPException(400, "نام دسته‌بندی نباید بیشتر از ۱۰۰ نویسه باشد")
+    with Session(engine) as s:
+        existing_names = s.exec(select(Category.name)).all()
+        if any(_normalize_product_search(existing) == _normalize_product_search(name)
+               for existing in existing_names):
+            raise HTTPException(400, f"دسته‌بندی «{name}» از قبل وجود دارد")
+        category = Category(name=name, created_by_id=user.id, updated_by_id=user.id)
+        s.add(category)
+        s.commit()
+        category_id = category.id
+    write_audit(engine, request, "category.create", user=user,
+                target_type="category", target_id=category_id,
+                metadata_json=json.dumps({"name": name}, ensure_ascii=False))
+    return RedirectResponse("/owner/categories", status_code=303)
+
+
+@app.post("/api/owner/categories/{category_id}/update")
+async def owner_category_update(category_id: int, request: Request,
+                                user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    name = str(form.get("name", "")).strip()
+    if not name:
+        raise HTTPException(400, "نام دسته‌بندی الزامی است")
+    if len(name) > 100:
+        raise HTTPException(400, "نام دسته‌بندی نباید بیشتر از ۱۰۰ نویسه باشد")
+    with Session(engine) as s:
+        category = s.get(Category, category_id)
+        if not category:
+            raise HTTPException(404, "دسته‌بندی پیدا نشد")
+        other_names = s.exec(select(Category).where(Category.id != category_id)).all()
+        if any(_normalize_product_search(other.name) == _normalize_product_search(name)
+               for other in other_names):
+            raise HTTPException(400, f"دسته‌بندی «{name}» از قبل وجود دارد")
+        old_name = category.name
+        category.name = name
+        category.updated_at = utcnow()
+        category.updated_by_id = user.id
+        s.add(category)
+        s.commit()
+    write_audit(engine, request, "category.update", user=user,
+                target_type="category", target_id=category_id,
+                metadata_json=json.dumps({"old_name": old_name, "new_name": name}, ensure_ascii=False))
+    return RedirectResponse("/owner/categories", status_code=303)
+
+
+@app.post("/api/owner/categories/{category_id}/delete")
+async def owner_category_delete(category_id: int, request: Request,
+                                user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    confirmed = str(form.get("confirm_unassign", "")) == "1"
+    with Session(engine) as s:
+        category = s.get(Category, category_id)
+        if not category:
+            raise HTTPException(404, "دسته‌بندی پیدا نشد")
+        links = s.exec(
+            select(ProductCategoryLink).where(ProductCategoryLink.category_id == category_id)
+        ).all()
+        if links and not confirmed:
+            return RedirectResponse("/owner/categories?error=confirmation_required", status_code=303)
+        category_name = category.name
+        affected_product_count = len({link.product_id for link in links})
+        for link in links:
+            s.delete(link)
+        s.delete(category)
+        s.commit()
+    write_audit(engine, request, "category.delete", user=user,
+                target_type="category", target_id=category_id,
+                metadata_json=json.dumps({"name": category_name,
+                                          "unassigned_product_count": affected_product_count}, ensure_ascii=False))
+    return RedirectResponse("/owner/categories", status_code=303)
 
 
 @app.get("/owner/users", response_class=HTMLResponse)

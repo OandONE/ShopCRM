@@ -1,74 +1,25 @@
 {% extends "base.html" %}
 {% block title %}پنل مالک - ShopCRM{% endblock %}
 {% block content %}
-<div class="d-flex align-items-center mb-4">
-  <h1 class="h2 mb-0"><i class="bi bi-shield-lock text-danger"></i> پنل مالک</h1>
-</div>
+<div class="d-flex align-items-center mb-4"><h1 class="h2 mb-0"><i class="bi bi-shield-lock text-danger"></i> پنل مالک</h1></div>
 
 <div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <div class="card bg-primary text-white shadow-sm">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center">
-          <div>
-            <div class="small opacity-75">کاربران فعال</div>
-            <div class="display-5 fw-bold">{{ users_count }}</div>
-          </div>
-          <i class="bi bi-people fs-1 opacity-50"></i>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card bg-info text-white shadow-sm">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center">
-          <div>
-            <div class="small opacity-75">رویدادهای ثبت‌شده</div>
-            <div class="display-5 fw-bold">{{ audit_count }}</div>
-          </div>
-          <i class="bi bi-journal-text fs-1 opacity-50"></i>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card bg-warning text-dark shadow-sm">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center">
-          <div>
-            <div class="small opacity-75">فروش‌های حذف‌شده</div>
-            <div class="display-5 fw-bold">{{ deleted_count }}</div>
-          </div>
-          <i class="bi bi-trash fs-1 opacity-50"></i>
-        </div>
-      </div>
-    </div>
-  </div>
+  <div class="col-md-4"><div class="card bg-primary text-white shadow-sm"><div class="card-body"><div class="d-flex justify-content-between align-items-center"><div><div class="small opacity-75">کاربران فعال</div><div class="display-5 fw-bold">{{ users_count }}</div></div><i class="bi bi-people fs-1 opacity-50"></i></div></div></div></div>
+  <div class="col-md-4"><div class="card bg-info text-white shadow-sm"><div class="card-body"><div class="d-flex justify-content-between align-items-center"><div><div class="small opacity-75">رویدادهای ثبت‌شده</div><div class="display-5 fw-bold">{{ audit_count }}</div></div><i class="bi bi-journal-text fs-1 opacity-50"></i></div></div></div></div>
+  <div class="col-md-4"><div class="card bg-warning text-dark shadow-sm"><div class="card-body"><div class="d-flex justify-content-between align-items-center"><div><div class="small opacity-75">فروش‌های حذف‌شده</div><div class="display-5 fw-bold">{{ deleted_count }}</div></div><i class="bi bi-trash fs-1 opacity-50"></i></div></div></div></div>
 </div>
 
 <div class="row g-3">
   {% set items = [
-    ("/owner/users",          "people",         "primary", "مدیریت ادمین‌ها",       "افزودن، ویرایش، تعلیق و حذف"),
-    ("/owner/audit",          "journal-text",   "info",    "لاگ فعالیت‌ها",         "پیگیری همه‌ی عملیات انجام‌شده"),
+    ("/owner/categories",     "tags",           "warning", "دسته‌بندی کالاها",       "ایجاد، ویرایش و حذف دسته‌بندی‌های محصولات"),
+    ("/owner/users",          "people",         "primary", "مدیریت ادمین‌ها",         "افزودن، ویرایش، تعلیق و حذف"),
+    ("/owner/audit",          "journal-text",   "info",    "لاگ فعالیت‌ها",           "پیگیری همه‌ی عملیات انجام‌شده"),
     ("/owner/deleted-sales",  "trash",          "warning", "فروش‌های حذف‌شده",       "مشاهده و بازیابی فروش‌های حذف‌شده"),
     ("/owner/settings",       "shop",           "success", "تنظیمات فروشگاه",       "نام، آدرس، تلفن و واحد پول"),
     ("/backup",               "hdd",            "danger",  "بک‌آپ",                 "دانلود و بازیابی دیتابیس"),
   ] %}
   {% for href, icon, color, title, sub in items %}
-  <div class="col-12 col-md-6 col-lg-4">
-    <a href="{{ href }}" class="text-decoration-none">
-      <div class="card h-100 shadow-sm border-0 card-hover">
-        <div class="card-body">
-          <div class="d-flex align-items-center mb-2">
-            <i class="bi bi-{{ icon }} fs-3 text-{{ color }} me-2"></i>
-            <h5 class="card-title mb-0 text-body">{{ title }}</h5>
-          </div>
-          <p class="card-text text-body-secondary small mb-0">{{ sub }}</p>
-        </div>
-      </div>
-    </a>
-  </div>
+  <div class="col-12 col-md-6 col-lg-4"><a href="{{ href }}" class="text-decoration-none"><div class="card h-100 shadow-sm border-0 card-hover"><div class="card-body"><div class="d-flex align-items-center mb-2"><i class="bi bi-{{ icon }} fs-3 text-{{ color }} me-2"></i><h5 class="card-title mb-0 text-body">{{ title }}</h5></div><p class="card-text text-body-secondary small mb-0">{{ sub }}</p></div></div></a></div>
   {% endfor %}
 </div>
 {% endblock %}
