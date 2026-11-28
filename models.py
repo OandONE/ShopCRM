@@ -93,6 +93,8 @@ class Product(SQLModel, table=True):
     price: Optional[int] = None
     purchase_price: Optional[int] = None
     stock_quantity: int = 0
+    low_stock_threshold: int = 0
+    low_stock_ignored: bool = False
     is_active: bool = True
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
@@ -306,3 +308,15 @@ class SavedAnalysis(SQLModel, table=True):
     config_json: str
     created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive, index=True)
+
+
+# Custom / manual stock alerts (shopping list style)
+class CustomStockAlert(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    desired_quantity: int = 1
+    note: Optional[str] = None
+    is_ignored: bool = False
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: NaiveDatetime = Field(default_factory=utcnow_naive)
+    updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)

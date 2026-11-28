@@ -11,6 +11,7 @@ from models import (
     Column, Product, Category, ProductCategoryLink, ProductPriceHistory, InventoryMovement,
     Sale, SaleValue, SaleItem, SaleItemValue, DeletedSale,
     SaleReturn, SaleReturnItem, Customer, WalletTransaction,
+    CustomStockAlert,
 )
 from shopcrm_analytics import build_analytics_router
 from rate_limit import RateLimiter
@@ -191,6 +192,8 @@ def _migrate_legacy_schema() -> None:
         "product": {
             "purchase_price": "INTEGER",
             "stock_quantity": "INTEGER NOT NULL DEFAULT 0",
+            "low_stock_threshold": "INTEGER NOT NULL DEFAULT 0",
+            "low_stock_ignored": "BOOLEAN NOT NULL DEFAULT 0",
             "is_active": "BOOLEAN NOT NULL DEFAULT 1",
         },
         "productpricehistory": {
@@ -1185,10 +1188,34 @@ async def me_password_submit(request: Request, user: User = Depends(require_user
 def index(request: Request, user: User = Depends(require_user)):
     with Session(engine) as s:
         settings = s.exec(select(StoreSettings)).first()
+        low_stock_products = []
+        low_count = 0
+        custom_count = 0
+        custom_preview = []
+        if user.has_permission("manage_products") or user.is_owner():
+            products = s.exec(select(Product).where(Product.is_active == True)).all()
+            for p in products:
+                if p.low_stock_ignored:
+                    continue
+                thresh = p.low_stock_threshold or 0
+                if p.stock_quantity <= thresh:
+                    low_stock_products.append(p)
+            low_count = len(low_stock_products)
+            low_stock_products = sorted(low_stock_products, key=lambda x: x.stock_quantity)[:4]
+            # Custom alerts
+            customs = s.exec(select(CustomStockAlert).where(CustomStockAlert.is_ignored == False)).all()
+            custom_count = len(customs)
+            custom_preview = customs[:3]
     is_default_pw = False
     if user.role == "owner" and user.username == "owner":
         is_default_pw = verify_password("owner", user.password_hash)
-    return render(request, "index.html", settings=settings, is_default_pw=is_default_pw)
+    return render(request, "index.html",
+                  settings=settings,
+                  is_default_pw=is_default_pw,
+                  low_stock_count=low_count,
+                  low_stock_preview=low_stock_products,
+                  custom_alert_count=custom_count,
+                  custom_alert_preview=custom_preview)
 
 
 # Sale forms
@@ -1427,6 +1454,150 @@ def admin_page(request: Request, user: User = Depends(require_user)):
                   product_creators=product_creators,
                   return_deduction_percent=return_deduction_percent,
                   can_view_purchase_cost=user.has_permission("view_purchase_cost"))
+
+
+
+# Low stock alerts
+
+@app.get("/low-stock", response_class=HTMLResponse)
+def low_stock_page(request: Request, user: User = Depends(require_user)):
+    if not (user.has_permission("manage_products") or user.is_owner()):
+        return RedirectResponse("/", status_code=303)
+    with Session(engine) as s:
+        products = s.exec(
+            select(Product).where(Product.is_active == True)
+            .order_by(Product.name)
+        ).all()
+        auto_alerts = []
+        for p in products:
+            if p.low_stock_ignored:
+                continue
+            thresh = p.low_stock_threshold or 0
+            if p.stock_quantity <= thresh:
+                shortage = max(0, thresh - p.stock_quantity)
+                auto_alerts.append({
+                    "type": "auto",
+                    "id": p.id,
+                    "name": p.name,
+                    "current": p.stock_quantity,
+                    "threshold": thresh,
+                    "shortage": shortage,
+                    "product": p,
+                })
+        custom_alerts = s.exec(
+            select(CustomStockAlert)
+            .order_by(CustomStockAlert.is_ignored, CustomStockAlert.created_at.desc())
+        ).all()
+        # Also collect ignored auto products for the unignore section
+        ignored_products = [p for p in products if p.low_stock_ignored and (p.stock_quantity <= (p.low_stock_threshold or 0))]
+    return render(request, "low_stock.html",
+                  auto_alerts=auto_alerts,
+                  custom_alerts=custom_alerts,
+                  ignored_products=ignored_products)
+
+
+@app.post("/api/product/{pid}/ignore-low-stock")
+async def ignore_low_stock(pid: int, request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        p = s.get(Product, pid)
+        if not p:
+            raise HTTPException(404, "محصول پیدا نشد")
+        p.low_stock_ignored = True
+        p.updated_at = utcnow()
+        p.updated_by_id = user.id
+        s.add(p)
+        s.commit()
+    write_audit(engine, request, "product.ignore_low_stock", user=user, target_type="product", target_id=pid)
+    return RedirectResponse("/low-stock", status_code=303)
+
+
+@app.post("/api/product/{pid}/unignore-low-stock")
+async def unignore_low_stock(pid: int, request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        p = s.get(Product, pid)
+        if not p:
+            raise HTTPException(404, "محصول پیدا نشد")
+        p.low_stock_ignored = False
+        p.updated_at = utcnow()
+        p.updated_by_id = user.id
+        s.add(p)
+        s.commit()
+    return RedirectResponse("/low-stock", status_code=303)
+
+
+@app.post("/api/custom-alert/add")
+async def add_custom_alert(request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    name = str(form.get("name", "")).strip()
+    desired = _parse_stock_value(form.get("desired_quantity", "1"), "تعداد مورد نیاز")
+    note = str(form.get("note", "")).strip() or None
+    if not name:
+        raise HTTPException(400, "نام الزامی است")
+    if desired < 1:
+        desired = 1
+    with Session(engine) as s:
+        alert = CustomStockAlert(
+            name=name,
+            desired_quantity=desired,
+            note=note,
+            created_by_id=user.id,
+        )
+        s.add(alert)
+        s.commit()
+        aid = alert.id
+    write_audit(engine, request, "custom_alert.create", user=user, target_type="custom_alert", target_id=aid,
+                metadata_json=json.dumps({"name": name, "desired": desired}, ensure_ascii=False))
+    return RedirectResponse("/low-stock", status_code=303)
+
+
+@app.post("/api/custom-alert/{aid}/delete")
+async def delete_custom_alert(aid: int, request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        alert = s.get(CustomStockAlert, aid)
+        if not alert:
+            raise HTTPException(404, "هشدار پیدا نشد")
+        s.delete(alert)
+        s.commit()
+    write_audit(engine, request, "custom_alert.delete", user=user, target_type="custom_alert", target_id=aid)
+    return RedirectResponse("/low-stock", status_code=303)
+
+
+
+@app.post("/api/custom-alert/{aid}/unignore")
+async def unignore_custom_alert(aid: int, request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        alert = s.get(CustomStockAlert, aid)
+        if not alert:
+            raise HTTPException(404, "هشدار پیدا نشد")
+        alert.is_ignored = False
+        alert.updated_at = utcnow()
+        s.add(alert)
+        s.commit()
+    return RedirectResponse("/low-stock", status_code=303)
+
+
+@app.post("/api/custom-alert/{aid}/ignore")
+async def ignore_custom_alert(aid: int, request: Request, user: User = Depends(require_permission("manage_products"))):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    with Session(engine) as s:
+        alert = s.get(CustomStockAlert, aid)
+        if not alert:
+            raise HTTPException(404, "هشدار پیدا نشد")
+        alert.is_ignored = True
+        alert.updated_at = utcnow()
+        s.add(alert)
+        s.commit()
+    return RedirectResponse("/low-stock", status_code=303)
 
 
 # Bulk price update
@@ -2891,6 +3062,7 @@ async def add_product(request: Request, user: User = Depends(require_permission(
     purchase_price = (_parse_optional_amount(form.get("purchase_price"), "قیمت خرید")
                       if user.has_permission("view_purchase_cost") else None)
     initial_stock = _parse_stock_value(form.get("stock_quantity", "0"), "موجودی اولیه")
+    low_stock_threshold = _parse_stock_value(form.get("low_stock_threshold", "0"), "حد هشدار موجودی")
     category_ids = _read_category_ids(form)
     if initial_stock < 0:
         raise HTTPException(400, "موجودی اولیه نمی‌تواند منفی باشد")
@@ -2902,7 +3074,8 @@ async def add_product(request: Request, user: User = Depends(require_permission(
         if s.exec(select(Product).where(Product.name == name)).first():
             raise HTTPException(400, f"محصول «{name}» قبلاً وجود دارد")
         p = Product(name=name, price=price, purchase_price=purchase_price,
-                    stock_quantity=initial_stock, is_active=True,
+                    stock_quantity=initial_stock, low_stock_threshold=low_stock_threshold,
+                    is_active=True,
                     created_by_id=user.id, updated_by_id=user.id)
         s.add(p)
         s.flush()
@@ -2932,6 +3105,7 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
     new_purchase_price = (_parse_optional_amount(form.get("purchase_price"), "قیمت خرید")
                          if user.has_permission("view_purchase_cost") else None)
     new_stock = _parse_stock_value(form.get("stock_quantity", "0"))
+    new_threshold = _parse_stock_value(form.get("low_stock_threshold", "0"), "حد هشدار موجودی")
     category_ids = _read_category_ids(form)
     if not new_name:
         raise HTTPException(400, "نام محصول الزامی است")
@@ -2958,6 +3132,7 @@ async def update_product(pid: int, request: Request, user: User = Depends(requir
         if user.has_permission("view_purchase_cost"):
             p.purchase_price = new_purchase_price
         p.stock_quantity = new_stock
+        p.low_stock_threshold = new_threshold
         p.updated_at = utcnow()
         p.updated_by_id = user.id
         s.add(p)

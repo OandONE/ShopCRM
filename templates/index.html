@@ -27,6 +27,31 @@
 </div>
 {% endif %}
 
+{% if (low_stock_count and low_stock_count > 0) or (custom_alert_count and custom_alert_count > 0) %}
+<div class="alert alert-warning d-flex align-items-start mb-4">
+  <i class="bi bi-exclamation-triangle fs-4 me-3"></i>
+  <div class="flex-grow-1">
+    <strong>⚠️ کمبود موجودی</strong>
+    {% if low_stock_count %}<span class="badge text-bg-warning ms-1">{{ low_stock_count }} کالا</span>{% endif %}
+    {% if custom_alert_count %}<span class="badge text-bg-info ms-1">{{ custom_alert_count }} سفارشی</span>{% endif %}
+    <div class="small mt-1">
+      {% for p in low_stock_preview %}
+        <span class="badge text-bg-light text-dark me-1 mb-1">{{ p.name }} ({{ p.stock_quantity }})</span>
+      {% endfor %}
+      {% for c in custom_alert_preview %}
+        <span class="badge text-bg-info text-dark me-1 mb-1">{{ c.name }}</span>
+      {% endfor %}
+      {% set total_shown = (low_stock_preview|length) + (custom_alert_preview|length) %}
+      {% set total_all = (low_stock_count or 0) + (custom_alert_count or 0) %}
+      {% if total_all > total_shown %}
+        <span class="text-muted">و موارد دیگر...</span>
+      {% endif %}
+    </div>
+  </div>
+  <a href="/low-stock" class="btn btn-warning btn-sm">مشاهده لیست</a>
+</div>
+{% endif %}
+
 {% set cards = [
   ("/quick",   "lightning-charge-fill", "warning", "فروش سریع",  "فقط فیلدهای ضروری", "quick_sale"),
   ("/full",    "pencil-square",         "primary", "فروش کامل",  "همه اطلاعات",       "full_sale"),

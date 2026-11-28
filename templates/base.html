@@ -98,7 +98,15 @@
 
         {# مدیریت محصولات، ستون‌ها و تنظیمات عملیاتی #}
         {% if current_user.has_permission('manage_columns') or current_user.has_permission('manage_products') or current_user.has_permission('view_current_columns') or current_user.has_permission('view_sales') %}
-        <li class="nav-item"><a class="nav-link" href="/admin"><i class="bi bi-gear"></i> مدیریت</a></li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="adminMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-gear"></i> مدیریت
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="adminMenu">
+            <li><a class="dropdown-item" href="/admin"><i class="bi bi-box"></i> مدیریت محصولات</a></li>
+            <li><a class="dropdown-item" href="/low-stock"><i class="bi bi-exclamation-triangle"></i> کمبود موجودی</a></li>
+          </ul>
+        </li>
         {% endif %}
 
         {# امکانات مخصوص مالک #}

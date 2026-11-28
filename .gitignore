@@ -6,3 +6,5 @@ venv
 .venv
 config.json
 database.db.restore.tmp
+main.py.bak
+models.py.bak
