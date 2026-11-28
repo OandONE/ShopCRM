@@ -153,6 +153,15 @@
   </form>
   <div class="form-text mt-2">درصد پیش‌فرض ۱۵٪ است. هنگام ثبت هر مرجوعی، مبلغ پیشنهادی محاسبه می‌شود و فروشنده می‌تواند مبلغ نهایی را ویرایش کند.</div>
 </div></div>
+
+<div class="card shadow-sm mb-4"><div class="card-header bg-info-subtle"><i class="bi bi-exclamation-triangle"></i> تنظیمات هشدار موجودی (مالک)</div><div class="card-body">
+  <form method="POST" action="/api/owner/near-border-settings/update" class="row g-2 align-items-end">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="col-sm-4 col-md-3"><label class="form-label">درصد نزدیک به مرز</label><div class="input-group"><input class="form-control" type="number" name="near_border_percent" min="0" max="100" value="{{ near_border_percent }}" required><span class="input-group-text">٪</span></div></div>
+    <div class="col-sm-4"><button class="btn btn-info" type="submit">ذخیره</button></div>
+  </form>
+  <div class="form-text mt-2">کالاهایی که موجودی‌شان تا این درصد بالاتر از حد هشدار باشد، با وضعیت «نزدیک به مرز» نمایش داده می‌شوند. پیش‌فرض ۱۰٪ است.</div>
+</div></div>
 {% endif %}
 
 {% if current_user.has_permission('view_current_columns') or current_user.has_permission('manage_columns') %}

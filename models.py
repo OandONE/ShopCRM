@@ -62,6 +62,7 @@ class StoreSettings(SQLModel, table=True):
     currency: str = "تومان"
     paper_size: str = "A5"  # A4 | A5 | thermal
     return_deduction_percent: int = 15
+    near_border_percent: int = 10
     updated_at: NaiveDatetime = Field(default_factory=utcnow_naive)
 
 

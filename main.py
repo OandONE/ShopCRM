@@ -188,6 +188,7 @@ def _migrate_legacy_schema() -> None:
         "storesettings": {
             "paper_size": "TEXT NOT NULL DEFAULT 'A5'",
             "return_deduction_percent": "INTEGER NOT NULL DEFAULT 15",
+            "near_border_percent": "INTEGER NOT NULL DEFAULT 10",
         },
         "product": {
             "purchase_price": "INTEGER",
@@ -1436,6 +1437,7 @@ def admin_page(request: Request, user: User = Depends(require_user)):
                 product_category_ids.setdefault(link.product_id, []).append(link.category_id)
         store_settings = s.exec(select(StoreSettings)).first()
         return_deduction_percent = store_settings.return_deduction_percent if store_settings else 15
+        near_border_percent = store_settings.near_border_percent if store_settings else 10
         product_creators = {}
         for p in products:
             if p.created_by_id:
@@ -1453,6 +1455,7 @@ def admin_page(request: Request, user: User = Depends(require_user)):
                   product_category_names=product_category_names,
                   product_creators=product_creators,
                   return_deduction_percent=return_deduction_percent,
+                  near_border_percent=near_border_percent,
                   can_view_purchase_cost=user.has_permission("view_purchase_cost"))
 
 
@@ -1464,16 +1467,23 @@ def low_stock_page(request: Request, user: User = Depends(require_user)):
     if not (user.has_permission("manage_products") or user.is_owner()):
         return RedirectResponse("/", status_code=303)
     with Session(engine) as s:
+        settings = s.exec(select(StoreSettings)).first()
+        near_pct = (settings.near_border_percent if settings else 10) or 10
         products = s.exec(
             select(Product).where(Product.is_active == True)
             .order_by(Product.name)
         ).all()
         auto_alerts = []
+        ignored_products = []
         for p in products:
-            if p.low_stock_ignored:
-                continue
             thresh = p.low_stock_threshold or 0
-            if p.stock_quantity <= thresh:
+            near_border_limit = int(thresh * (1 + near_pct / 100.0)) if thresh > 0 else 0
+            is_relevant = p.stock_quantity <= max(thresh, near_border_limit)
+            if not is_relevant:
+                continue
+            if p.low_stock_ignored:
+                ignored_products.append(p)
+            else:
                 shortage = max(0, thresh - p.stock_quantity)
                 auto_alerts.append({
                     "type": "auto",
@@ -1488,8 +1498,6 @@ def low_stock_page(request: Request, user: User = Depends(require_user)):
             select(CustomStockAlert)
             .order_by(CustomStockAlert.is_ignored, CustomStockAlert.created_at.desc())
         ).all()
-        # Also collect ignored auto products for the unignore section
-        ignored_products = [p for p in products if p.low_stock_ignored and (p.stock_quantity <= (p.low_stock_threshold or 0))]
     return render(request, "low_stock.html",
                   auto_alerts=auto_alerts,
                   custom_alerts=custom_alerts,
@@ -3250,6 +3258,28 @@ def product_stock_history(pid: int, user: User = Depends(require_permission("man
                 "created_at": row.created_at.isoformat(),
             })
         return result
+
+
+
+@app.post("/api/owner/near-border-settings/update")
+async def update_near_border_settings(request: Request, user: User = Depends(require_owner)):
+    form = await request.form()
+    verify_csrf(request, str(form.get("csrf_token", "")))
+    raw = _to_int(form.get("near_border_percent"))
+    if raw is None or raw < 0 or raw > 100:
+        raise HTTPException(400, "درصد نامعتبر است")
+    with Session(engine) as s:
+        settings = s.exec(select(StoreSettings)).first()
+        if not settings:
+            settings = StoreSettings()
+            s.add(settings)
+        settings.near_border_percent = raw
+        settings.updated_at = utcnow()
+        s.add(settings)
+        s.commit()
+    write_audit(engine, request, "settings.near_border.update", user=user,
+                metadata_json=json.dumps({"near_border_percent": raw}))
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/api/owner/return-settings/update")
